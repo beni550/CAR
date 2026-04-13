@@ -266,7 +266,7 @@ export default function HomePage() {
                 <li className="flex items-center gap-2"><span className="text-emerald-400">✓</span> השוואת רכבים</li>
                 <li className="flex items-center gap-2"><span className="text-emerald-400">✓</span> ללא פרסומות</li>
               </ul>
-              <Button data-testid="pricing-pro-btn" className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-xl">
+              <Button data-testid="pricing-pro-btn" className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-xl" onClick={() => navigate('/pricing')}>
                 שדרג ל-Pro
               </Button>
             </motion.div>

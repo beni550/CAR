@@ -1,9 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Check, X, Zap } from 'lucide-react';
+import { Check, X, Zap, Loader2 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
+import { useAuth } from '../contexts/AuthContext';
+import axios from 'axios';
+
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const API = `${BACKEND_URL}/api`;
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
 
@@ -29,6 +34,30 @@ const faqs = [
 
 export default function PricingPage() {
   const navigate = useNavigate();
+  const { user, login } = useAuth();
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+
+  const isPro = user?.plan === 'pro';
+
+  const handleUpgrade = async () => {
+    if (!user) {
+      login();
+      return;
+    }
+    if (isPro) return;
+
+    setUpgradeLoading(true);
+    try {
+      const originUrl = window.location.origin;
+      const resp = await axios.post(`${API}/checkout/create`, { origin_url: originUrl }, { withCredentials: true });
+      if (resp.data.url) {
+        window.location.href = resp.data.url;
+      }
+    } catch (err) {
+      console.error('Checkout error:', err);
+      setUpgradeLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen ambient-bg pt-20 px-4 pb-safe" data-testid="pricing-page">
@@ -58,8 +87,8 @@ export default function PricingPage() {
             <h3 className="font-rubik font-bold text-xl mb-1 text-blue-400">Pro</h3>
             <p className="text-sm text-white/40 mb-4">לשימוש מקצועי</p>
             <div className="text-4xl font-rubik font-bold mb-6">$5<span className="text-base text-white/40 font-normal">/חודש</span></div>
-            <Button data-testid="pricing-upgrade-btn" className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-xl mb-4">
-              שדרג ל-Pro
+            <Button data-testid="pricing-upgrade-btn" onClick={handleUpgrade} disabled={upgradeLoading || isPro} className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-xl mb-4">
+              {upgradeLoading ? <><Loader2 className="w-4 h-4 ml-2 animate-spin" /> מעבד...</> : isPro ? 'המנוי פעיל' : 'שדרג ל-Pro'}
             </Button>
           </motion.div>
         </motion.div>

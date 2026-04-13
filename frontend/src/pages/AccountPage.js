@@ -1,15 +1,21 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { User, Mail, Calendar, Crown, Moon, Sun, LogOut, BarChart3 } from 'lucide-react';
+import { User, Mail, Calendar, Crown, LogOut, BarChart3, CreditCard, Loader2 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { useAuth } from '../contexts/AuthContext';
+import axios from 'axios';
+
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const API = `${BACKEND_URL}/api`;
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
 
 export default function AccountPage() {
-  const { user, logout, loading: authLoading } = useAuth();
+  const { user, logout, loading: authLoading, checkAuth } = useAuth();
   const navigate = useNavigate();
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -66,9 +72,9 @@ export default function AccountPage() {
                 <div>
                   <div className="text-xs text-white/40">סוג מנוי</div>
                   <div className="text-sm flex items-center gap-2">
-                    {user.plan === 'pro' ? 'Pro' : 'Free'}
-                    {user.plan !== 'pro' && (
-                      <button onClick={() => navigate('/pricing')} className="text-blue-400 text-xs hover:underline">שדרג</button>
+                    <span className={user.plan === 'pro' ? 'text-blue-400 font-medium' : ''}>{user.plan === 'pro' ? 'Pro' : 'Free'}</span>
+                    {user.subscription_end && user.plan === 'pro' && (
+                      <span className="text-xs text-white/30">עד {new Date(user.subscription_end).toLocaleDateString('he-IL')}</span>
                     )}
                   </div>
                 </div>
@@ -83,6 +89,63 @@ export default function AccountPage() {
                 </div>
               )}
             </div>
+          </motion.div>
+
+          {/* Subscription Management */}
+          <motion.div variants={fadeUp} className="glass-card p-5 mb-4 hover:translate-y-0" data-testid="subscription-section">
+            <h3 className="font-rubik font-semibold text-sm text-white/40 uppercase tracking-wider mb-4">
+              <CreditCard className="w-4 h-4 inline ml-2" />
+              ניהול מנוי
+            </h3>
+            {user.plan === 'pro' ? (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span className="text-sm text-emerald-400 font-medium">מנוי Pro פעיל</span>
+                </div>
+                {user.subscription_end && (
+                  <p className="text-xs text-white/40 mb-4">מתחדש ב-{new Date(user.subscription_end).toLocaleDateString('he-IL')}</p>
+                )}
+                <Button
+                  data-testid="cancel-subscription-btn"
+                  onClick={async () => {
+                    setCancelLoading(true);
+                    try {
+                      await axios.post(`${API}/subscription/cancel`, {}, { withCredentials: true });
+                      await checkAuth();
+                    } catch { /* ignore */ }
+                    finally { setCancelLoading(false); }
+                  }}
+                  disabled={cancelLoading}
+                  variant="outline"
+                  size="sm"
+                  className="border-red-500/20 bg-red-500/5 text-red-400 hover:bg-red-500/10 rounded-xl text-xs"
+                >
+                  {cancelLoading ? <Loader2 className="w-3 h-3 ml-1 animate-spin" /> : null}
+                  בטל מנוי
+                </Button>
+              </div>
+            ) : (
+              <div>
+                <p className="text-sm text-white/50 mb-4">שדרג ל-Pro כדי לקבל גישה מלאה לכל התכונות</p>
+                <Button
+                  data-testid="upgrade-from-account-btn"
+                  onClick={async () => {
+                    setUpgradeLoading(true);
+                    try {
+                      const originUrl = window.location.origin;
+                      const resp = await axios.post(`${API}/checkout/create`, { origin_url: originUrl }, { withCredentials: true });
+                      if (resp.data.url) window.location.href = resp.data.url;
+                    } catch { setUpgradeLoading(false); }
+                  }}
+                  disabled={upgradeLoading}
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm"
+                >
+                  {upgradeLoading ? <><Loader2 className="w-3 h-3 ml-1 animate-spin" /> מעבד...</> : 'שדרג ל-Pro — $5/חודש'}
+                </Button>
+              </div>
+            )}
           </motion.div>
 
           {/* Quick Links */}

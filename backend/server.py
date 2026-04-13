@@ -363,6 +363,171 @@ async def get_stats():
     total_users = await db.users.count_documents({})
     return {"total_searches": max(total_searches, 1247), "total_users": max(total_users, 850), "total_vehicles": 4200000}
 
+# --- Stripe Subscription ---
+from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
+
+# Fixed subscription packages — amounts defined server-side only
+PRO_PLAN = {"id": "pro_monthly", "name": "Pro Monthly", "amount": 5.00, "currency": "usd"}
+
+class CreateCheckoutRequest(BaseModel):
+    origin_url: str
+
+@api_router.post("/checkout/create")
+async def create_checkout_session(body: CreateCheckoutRequest, request: Request):
+    user = await require_auth(request)
+
+    stripe_api_key = os.environ.get("STRIPE_API_KEY")
+    if not stripe_api_key:
+        raise HTTPException(status_code=500, detail="Payment service not configured")
+
+    host_url = str(request.base_url).rstrip("/")
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
+
+    origin = body.origin_url.rstrip("/")
+    success_url = f"{origin}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin}/pricing"
+
+    checkout_request = CheckoutSessionRequest(
+        amount=PRO_PLAN["amount"],
+        currency=PRO_PLAN["currency"],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "user_id": user["user_id"],
+            "plan": "pro",
+            "package_id": PRO_PLAN["id"]
+        }
+    )
+
+    session = await stripe_checkout.create_checkout_session(checkout_request)
+
+    # Create payment_transactions record BEFORE redirect
+    await db.payment_transactions.insert_one({
+        "session_id": session.session_id,
+        "user_id": user["user_id"],
+        "amount": PRO_PLAN["amount"],
+        "currency": PRO_PLAN["currency"],
+        "package_id": PRO_PLAN["id"],
+        "payment_status": "pending",
+        "status": "initiated",
+        "metadata": {"plan": "pro"},
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    return {"url": session.url, "session_id": session.session_id}
+
+@api_router.get("/checkout/status/{session_id}")
+async def get_checkout_status(session_id: str, request: Request):
+    user = await require_auth(request)
+
+    stripe_api_key = os.environ.get("STRIPE_API_KEY")
+    if not stripe_api_key:
+        raise HTTPException(status_code=500, detail="Payment service not configured")
+
+    host_url = str(request.base_url).rstrip("/")
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
+
+    checkout_status = await stripe_checkout.get_checkout_status(session_id)
+
+    # Update transaction record — only process once
+    tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if tx and tx.get("payment_status") != "paid":
+        new_status = checkout_status.payment_status
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                "payment_status": new_status,
+                "status": checkout_status.status,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+
+        # If paid, upgrade user to pro
+        if new_status == "paid":
+            subscription_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+            await db.users.update_one(
+                {"user_id": tx["user_id"]},
+                {"$set": {
+                    "plan": "pro",
+                    "subscription_id": session_id,
+                    "subscription_end": subscription_end
+                }}
+            )
+            logger.info(f"User {tx['user_id']} upgraded to Pro")
+
+    return {
+        "status": checkout_status.status,
+        "payment_status": checkout_status.payment_status,
+        "amount_total": checkout_status.amount_total,
+        "currency": checkout_status.currency
+    }
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("Stripe-Signature", "")
+
+    stripe_api_key = os.environ.get("STRIPE_API_KEY")
+    if not stripe_api_key:
+        raise HTTPException(status_code=500, detail="Payment service not configured")
+
+    host_url = str(request.base_url).rstrip("/")
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
+
+    try:
+        webhook_response = await stripe_checkout.handle_webhook(body, signature)
+        logger.info(f"Webhook event: {webhook_response.event_type}, session: {webhook_response.session_id}")
+
+        if webhook_response.payment_status == "paid" and webhook_response.session_id:
+            tx = await db.payment_transactions.find_one(
+                {"session_id": webhook_response.session_id}, {"_id": 0}
+            )
+            if tx and tx.get("payment_status") != "paid":
+                await db.payment_transactions.update_one(
+                    {"session_id": webhook_response.session_id},
+                    {"$set": {
+                        "payment_status": "paid",
+                        "status": "complete",
+                        "webhook_event_id": webhook_response.event_id,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                subscription_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+                await db.users.update_one(
+                    {"user_id": tx["user_id"]},
+                    {"$set": {
+                        "plan": "pro",
+                        "subscription_id": webhook_response.session_id,
+                        "subscription_end": subscription_end
+                    }}
+                )
+
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
+
+@api_router.get("/subscription")
+async def get_subscription(request: Request):
+    user = await require_auth(request)
+    return {
+        "plan": user.get("plan", "free"),
+        "subscription_id": user.get("subscription_id"),
+        "subscription_end": user.get("subscription_end")
+    }
+
+@api_router.post("/subscription/cancel")
+async def cancel_subscription(request: Request):
+    user = await require_auth(request)
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"plan": "free", "subscription_id": None, "subscription_end": None}}
+    )
+    return {"message": "Subscription cancelled", "plan": "free"}
+
 # Include router and middleware
 import asyncio
 app.include_router(api_router)

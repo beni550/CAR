@@ -12,6 +12,7 @@ import FavoritesPage from './pages/FavoritesPage';
 import PricingPage from './pages/PricingPage';
 import AccountPage from './pages/AccountPage';
 import QuickSearchPage from './pages/QuickSearchPage';
+import PaymentSuccess from './pages/PaymentSuccess';
 import './index.css';
 
 function AppRouter() {
@@ -39,6 +40,7 @@ function AppRouter() {
         <Route path="/favorites" element={<FavoritesPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/account" element={<AccountPage />} />
+        <Route path="/payment/success" element={<PaymentSuccess />} />
         <Route path="/dashboard" element={<HomePage />} />
         <Route path="*" element={<HomePage />} />
       </Routes>
