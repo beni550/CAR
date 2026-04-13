@@ -49,7 +49,7 @@ Build "רכב IL" (Rechev IL) - Israeli vehicle lookup and analysis web applicat
 ## Prioritized Backlog
 
 ### P0 (Critical)
-- [ ] Stripe payment integration for Pro plan (currently MOCKED)
+- [x] Stripe payment integration for Pro plan ($5/month) - DONE
 
 ### P1 (Important)
 - [ ] Vehicle comparison page (up to 3 vehicles)

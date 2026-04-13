@@ -429,7 +429,11 @@ async def get_checkout_status(session_id: str, request: Request):
     webhook_url = f"{host_url}/api/webhook/stripe"
     stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
 
-    checkout_status = await stripe_checkout.get_checkout_status(session_id)
+    try:
+        checkout_status = await stripe_checkout.get_checkout_status(session_id)
+    except Exception as e:
+        logger.error(f"Checkout status error: {e}")
+        raise HTTPException(status_code=404, detail="Checkout session not found")
 
     # Update transaction record — only process once
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
