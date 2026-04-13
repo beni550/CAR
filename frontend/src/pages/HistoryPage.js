@@ -12,12 +12,13 @@ const API = `${BACKEND_URL}/api`;
 const fadeUp = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
 
 export default function HistoryPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (authLoading) return;
     if (!user) { navigate('/login'); return; }
     const fetchHistory = async () => {
       try {
@@ -27,7 +28,7 @@ export default function HistoryPage() {
       finally { setLoading(false); }
     };
     fetchHistory();
-  }, [user, navigate]);
+  }, [user, authLoading, navigate]);
 
   const deleteItem = async (id) => {
     try {
