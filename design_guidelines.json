@@ -1,0 +1,127 @@
+{
+  "project_name": "Rechev IL",
+  "theme": "dark",
+  "archetype": "Tech & Glassmorphism",
+  "direction": "rtl",
+  "typography": {
+    "headings": {
+      "family": "Rubik, sans-serif",
+      "weights": ["400", "500", "700"],
+      "tracking": "tracking-tight"
+    },
+    "body": {
+      "family": "Heebo, sans-serif",
+      "weights": ["400", "500"]
+    },
+    "sizes": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl",
+      "h3": "text-xl sm:text-2xl",
+      "h4": "text-lg sm:text-xl",
+      "body": "text-base",
+      "small": "text-sm"
+    }
+  },
+  "colors": {
+    "background": {
+      "primary": "#0a0e1a",
+      "secondary": "#111827",
+      "glass": "rgba(10, 14, 26, 0.6)"
+    },
+    "accent": {
+      "blue": "#3b82f6",
+      "glow": "rgba(59, 130, 246, 0.5)"
+    },
+    "status": {
+      "success": "#10b981",
+      "danger": "#ef4444",
+      "warning": "#f59e0b",
+      "disability": "#3b82f6"
+    },
+    "license_plate": {
+      "yellow": "#FFCC00",
+      "blue": "#003399",
+      "text": "#000000"
+    },
+    "text": {
+      "primary": "#ffffff",
+      "secondary": "#9ca3af",
+      "muted": "#6b7280"
+    }
+  },
+  "layout_and_spacing": {
+    "philosophy": "Mobile-first, generous spacing with bottom navigation bar. RTL direction.",
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "grids": {
+      "marketing": "grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-8",
+      "dashboard": "grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+    },
+    "alignment": "Right-to-left layout. Text align right by default.",
+    "navigation": "Bottom navigation bar on mobile, standard header on desktop."
+  },
+  "components": {
+    "glass_cards": {
+      "background": "bg-white/5 dark:bg-[#0a0e1a]/60",
+      "blur": "backdrop-blur-xl",
+      "border": "border border-white/10",
+      "shadow": "shadow-[0_8px_32px_rgba(0,0,0,0.3)]",
+      "hover": "hover:bg-white/10 transition-all duration-300 hover:-translate-y-1 hover:border-accent-blue/50 hover:shadow-[0_0_20px_rgba(59,130,246,0.2)]"
+    },
+    "status_cards": {
+      "clean": "border-r-4 border-r-success bg-success/10",
+      "stolen": "border-r-4 border-r-danger bg-danger/10",
+      "expired": "border-r-4 border-r-danger bg-danger/10",
+      "disability": "border-r-4 border-r-accent-blue bg-accent-blue/10",
+      "note": "RTL implies the accent border is on the right (border-r-4)"
+    },
+    "license_plate": {
+      "container": "flex flex-row-reverse items-stretch w-full max-w-sm mx-auto rounded-md overflow-hidden border-2 border-black/20 shadow-lg bg-plate-yellow",
+      "blue_strip": "bg-plate-blue w-12 flex flex-col items-center justify-center text-white font-bold p-2",
+      "text": "flex-1 text-center font-bold text-4xl tracking-widest text-black py-3 flex items-center justify-center font-sans",
+      "direction": "Must enforce LTR on the numbers so it reads correctly left-to-right despite RTL page direction. Apply dir='ltr' to the text container."
+    },
+    "ambient_glow": {
+      "primary": "absolute top-0 right-[-10%] w-72 h-72 bg-accent-blue rounded-full mix-blend-screen filter blur-[128px] opacity-20 pointer-events-none",
+      "secondary": "absolute bottom-0 left-[-10%] w-72 h-72 bg-plate-yellow rounded-full mix-blend-screen filter blur-[128px] opacity-10 pointer-events-none"
+    },
+    "skeleton": {
+      "base": "animate-pulse bg-white/10 rounded-md"
+    }
+  },
+  "motion": {
+    "staggered_fade": "Framer Motion variants for staggered children reveal (initial opacity 0, y 20)",
+    "scroll_reveal": "Use whileInView with Framer Motion",
+    "counters": "framer-motion useMotionValue and animate for social proof stats",
+    "hover_glow": "transition-all duration-300 shadow-none hover:shadow-[0_0_15px_currentColor]"
+  },
+  "media": {
+    "hero_car_tech": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/50e28fad-f458-4767-b9ef-3065fc178088/images/42d19fd50371d6c029ffcc2f3956909d590c9c375e4a07f62d08734c292313bb.png",
+      "description": "Hero background - futuristic car tech silhouette"
+    },
+    "city_night_1": {
+      "url": "https://images.unsplash.com/photo-1689572144000-1638de832b0c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwyfHx0ZWwlMjBhdml2JTIwaGlnaHdheSUyMG5pZ2h0fGVufDB8fHx8MTc3NjEwMTAwNHww&ixlib=rb-4.1.0&q=85",
+      "description": "Background image for location-based search or marketing sections"
+    },
+    "city_night_2": {
+      "url": "https://images.unsplash.com/photo-1689572351263-1a85bb371992?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwxfHx0ZWwlMjBhdml2JTIwaGlnaHdheSUyMG5pZ2h0fGVufDB8fHx8MTc3NjEwMTAwNHww&ixlib=rb-4.1.0&q=85",
+      "description": "Alternative background for blog or articles"
+    },
+    "modern_car": {
+      "url": "https://images.unsplash.com/photo-1770816307595-9894ada96b95?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBjYXIlMjBleHRlcmlvcnxlbnwwfHx8fDE3NzYxMDEwMDR8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Featured car for blog or recent searches"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Ensure <html dir='rtl' lang='he'> is set in the main document.",
+    "Import and use Rubik for headings and Heebo for body text (use Google Fonts).",
+    "Ensure .js files are used for React components (JSX syntax within .js is standard here, NOT .tsx).",
+    "All interactive elements (buttons, inputs, links, cards) MUST include a 'data-testid' attribute (e.g., data-testid='submit-plate-btn').",
+    "Use Framer Motion for all staggered fade-ups and number counters.",
+    "Build a bottom navigation bar visible only on mobile screens (fixed to bottom).",
+    "Use a custom React component for the Israeli License Plate that visually mimics the yellow plate (#FFCC00) with the blue IL side strip (#003399). Keep numbers left-to-right by applying dir='ltr'.",
+    "Apply backdrop-blur to all primary cards to create the glassmorphism effect.",
+    "Add radial gradients for ambient glow behind main components to match the high-tech, glowing feel.",
+    "Use Phosphor icons or Lucide, ensuring directional icons (like arrows) are flipped for RTL."
+  ]
+}
