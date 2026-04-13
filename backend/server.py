@@ -30,9 +30,14 @@ logger = logging.getLogger(__name__)
 
 # --- data.gov.il API config ---
 VEHICLE_RESOURCE_ID = "053cea08-09bc-40ec-8f7a-156f0677aff3"
-DISABILITY_RESOURCE_ID = "c8b9f9c8-46bd-4366-a4a9-8292839212c1"
+MOTORCYCLE_RESOURCE_ID = "bf9df4e2-d90d-4c0a-a400-19e15af8e95f"
+DISABILITY_RESOURCE_ID = "c8b9f9c8-4612-4068-934f-d4acd2e3c06e"
 THEFT_RESOURCE_ID = "8ef60e16-ca5f-463f-8555-c49b10640d2f"
+PRICE_LIST_RESOURCE_ID = "39f455bf-6db0-4926-859d-017f34eacbcb"
 DATA_GOV_BASE = "https://data.gov.il/api/3/action/datastore_search"
+
+# Depreciation rates per year
+DEPRECIATION_RATES = [0.15, 0.12, 0.10, 0.08, 0.07, 0.06]  # years 1-6, then 5% per year after
 
 # --- Pydantic Models ---
 class UserOut(BaseModel):
@@ -209,13 +214,18 @@ async def check_disability(plate: str):
             DATA_GOV_BASE,
             params={
                 "resource_id": DISABILITY_RESOURCE_ID,
-                "filters": f'{{"MISPAR_RECHEV":{plate_num}}}',
+                "filters": f'{{"MISPAR RECHEV":{plate_num}}}',
                 "limit": 1
             }
         )
     data = resp.json()
     records = data.get("result", {}).get("records", [])
-    return {"has_disability_tag": len(records) > 0, "records": records}
+    result = {"has_disability_tag": len(records) > 0}
+    if records:
+        rec = records[0]
+        result["issue_date"] = rec.get("TAARICH HAFAKAT TAG")
+        result["tag_type"] = rec.get("SUG TAV")
+    return result
 
 @api_router.get("/vehicle/full")
 async def full_vehicle_check(plate: str):
@@ -225,23 +235,123 @@ async def full_vehicle_check(plate: str):
 
     plate_num = int(plate_clean)
     async with httpx.AsyncClient(timeout=15.0) as http_client:
-        vehicle_resp, theft_resp, disability_resp = await asyncio.gather(
+        # Search vehicles, motorcycles, theft, and disability in parallel
+        vehicle_resp, motorcycle_resp, theft_resp, disability_resp = await asyncio.gather(
             http_client.get(DATA_GOV_BASE, params={"resource_id": VEHICLE_RESOURCE_ID, "filters": f'{{"mispar_rechev":{plate_num}}}', "limit": 1}),
+            http_client.get(DATA_GOV_BASE, params={"resource_id": MOTORCYCLE_RESOURCE_ID, "filters": f'{{"mispar_rechev":{plate_num}}}', "limit": 1}),
             http_client.get(DATA_GOV_BASE, params={"resource_id": THEFT_RESOURCE_ID, "filters": f'{{"MISPAR_RECHEV":{plate_num}}}', "limit": 1}),
-            http_client.get(DATA_GOV_BASE, params={"resource_id": DISABILITY_RESOURCE_ID, "filters": f'{{"MISPAR_RECHEV":{plate_num}}}', "limit": 1}),
+            http_client.get(DATA_GOV_BASE, params={"resource_id": DISABILITY_RESOURCE_ID, "filters": f'{{"MISPAR RECHEV":{plate_num}}}', "limit": 1}),
         )
 
     vehicle_data = vehicle_resp.json().get("result", {}).get("records", [])
+    motorcycle_data = motorcycle_resp.json().get("result", {}).get("records", [])
     theft_data = theft_resp.json().get("result", {}).get("records", [])
     disability_data = disability_resp.json().get("result", {}).get("records", [])
 
-    if not vehicle_data:
+    is_motorcycle = False
+    vehicle_record = None
+
+    if vehicle_data:
+        vehicle_record = vehicle_data[0]
+    elif motorcycle_data:
+        vehicle_record = motorcycle_data[0]
+        is_motorcycle = True
+    else:
         raise HTTPException(status_code=404, detail="Vehicle not found")
 
+    # Build disability info
+    disability_info = {"has_disability_tag": len(disability_data) > 0}
+    if disability_data:
+        rec = disability_data[0]
+        disability_info["issue_date"] = rec.get("TAARICH HAFAKAT TAG")
+        disability_info["tag_type"] = rec.get("SUG TAV")
+
+    # Fetch price list if it's a regular vehicle (not motorcycle)
+    price_info = None
+    if not is_motorcycle and vehicle_record:
+        tozeret_cd = vehicle_record.get("tozeret_cd")
+        degem_cd = vehicle_record.get("degem_cd")
+        shnat_yitzur = vehicle_record.get("shnat_yitzur")
+        if tozeret_cd and degem_cd and shnat_yitzur:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as http_client:
+                    price_resp = await http_client.get(
+                        DATA_GOV_BASE,
+                        params={
+                            "resource_id": PRICE_LIST_RESOURCE_ID,
+                            "filters": f'{{"tozeret_cd":{tozeret_cd},"degem_cd":{degem_cd},"shnat_yitzur":{shnat_yitzur}}}',
+                            "limit": 5
+                        }
+                    )
+                price_records = price_resp.json().get("result", {}).get("records", [])
+                if price_records:
+                    price_info = _calculate_vehicle_value(price_records, shnat_yitzur)
+            except Exception as e:
+                logger.warning(f"Price lookup failed: {e}")
+
     return {
-        "vehicle": vehicle_data[0],
+        "vehicle": vehicle_record,
+        "is_motorcycle": is_motorcycle,
         "theft": {"stolen": len(theft_data) > 0, "records": theft_data},
-        "disability": {"has_disability_tag": len(disability_data) > 0, "records": disability_data}
+        "disability": disability_info,
+        "price": price_info
+    }
+
+
+def _calculate_vehicle_value(price_records, shnat_yitzur):
+    """Calculate estimated vehicle value based on price list and depreciation."""
+    current_year = datetime.now().year
+    age = current_year - int(shnat_yitzur)
+    if age < 0:
+        age = 0
+
+    prices = []
+    importers = set()
+    for rec in price_records:
+        mehir = rec.get("mehir")
+        if mehir and isinstance(mehir, (int, float)) and mehir > 0:
+            prices.append({
+                "original_price": int(mehir),
+                "importer": rec.get("shem_yevuan", ""),
+                "trim": rec.get("kinuy_mishari", ""),
+                "model_type": rec.get("sug_degem", "")
+            })
+            if rec.get("shem_yevuan"):
+                importers.add(rec.get("shem_yevuan"))
+
+    if not prices:
+        return None
+
+    # Calculate depreciation
+    total_depreciation = 0.0
+    for year in range(age):
+        if year < len(DEPRECIATION_RATES):
+            total_depreciation += (1 - total_depreciation) * DEPRECIATION_RATES[year]
+        else:
+            total_depreciation += (1 - total_depreciation) * 0.05
+
+    # Get min/max original prices
+    min_original = min(p["original_price"] for p in prices)
+    max_original = max(p["original_price"] for p in prices)
+
+    # Calculate estimated values
+    min_estimated = int(min_original * (1 - total_depreciation))
+    max_estimated = int(max_original * (1 - total_depreciation))
+
+    # Apply ±10% range
+    low_range = int(min_estimated * 0.9)
+    high_range = int(max_estimated * 1.1)
+
+    return {
+        "original_price_min": min_original,
+        "original_price_max": max_original,
+        "estimated_low": low_range,
+        "estimated_high": high_range,
+        "age_years": age,
+        "depreciation_pct": round(total_depreciation * 100, 1),
+        "importers": list(importers),
+        "trims": [p["trim"] for p in prices if p["trim"]],
+        "record_count": len(prices)
     }
 
 # --- AI Plate Recognition ---

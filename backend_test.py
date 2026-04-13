@@ -79,20 +79,45 @@ class RechevILAPITester:
             return None
 
     def test_vehicle_apis(self):
-        """Test vehicle-related APIs with test plate 1234567"""
+        """Test vehicle-related APIs with test plates"""
         print("\n🚗 Testing Vehicle APIs...")
         
-        # Test vehicle search
-        vehicle_data = self.test_api_endpoint('GET', 'vehicle/search?plate=1234567', 200, description="(Basic Search)")
+        # Test car with price estimation (1234567 - Alfa Romeo 159)
+        print("  Testing car plate 1234567 (should have price data)...")
+        car_data = self.test_api_endpoint('GET', 'vehicle/full?plate=1234567', 200, description="(Car Full Check)")
         
-        # Test full vehicle check
-        full_data = self.test_api_endpoint('GET', 'vehicle/full?plate=1234567', 200, description="(Full Check)")
+        if car_data:
+            # Verify car-specific fields
+            is_motorcycle = car_data.get('is_motorcycle', True)  # Should be False
+            has_price = car_data.get('price') is not None
+            
+            self.log_test("Car is_motorcycle field", not is_motorcycle, 
+                         f"Expected False, got {is_motorcycle}" if is_motorcycle else "")
+            self.log_test("Car has price data", has_price, 
+                         "Price data missing" if not has_price else f"Price range: {car_data.get('price', {}).get('estimated_low', 'N/A')} - {car_data.get('price', {}).get('estimated_high', 'N/A')}")
+        
+        # Test motorcycle (21076803 - Benelli P1600 TRK502X ABS)
+        print("  Testing motorcycle plate 21076803 (should be motorcycle)...")
+        motorcycle_data = self.test_api_endpoint('GET', 'vehicle/full?plate=21076803', 200, description="(Motorcycle Full Check)")
+        
+        if motorcycle_data:
+            # Verify motorcycle-specific fields
+            is_motorcycle = motorcycle_data.get('is_motorcycle', False)  # Should be True
+            has_price = motorcycle_data.get('price') is not None  # Should be None for motorcycles
+            
+            self.log_test("Motorcycle is_motorcycle field", is_motorcycle, 
+                         f"Expected True, got {is_motorcycle}" if not is_motorcycle else "")
+            self.log_test("Motorcycle has no price data", not has_price, 
+                         "Motorcycles should not have price data" if has_price else "")
+        
+        # Test basic vehicle search
+        vehicle_data = self.test_api_endpoint('GET', 'vehicle/search?plate=1234567', 200, description="(Basic Search)")
         
         # Test theft check
         self.test_api_endpoint('GET', 'vehicle/theft?plate=1234567', 200, description="(Theft Check)")
         
-        # Test disability check
-        self.test_api_endpoint('GET', 'vehicle/disability?plate=1234567', 200, description="(Disability Check)")
+        # Test disability check with corrected endpoint
+        disability_data = self.test_api_endpoint('GET', 'vehicle/disability?plate=1234567', 200, description="(Disability Check)")
         
         # Test invalid plate
         self.test_api_endpoint('GET', 'vehicle/search?plate=123', 400, description="(Invalid Plate)")
@@ -100,7 +125,7 @@ class RechevILAPITester:
         # Test non-existent plate
         self.test_api_endpoint('GET', 'vehicle/search?plate=9999999', 404, description="(Non-existent Plate)")
         
-        return vehicle_data, full_data
+        return vehicle_data, car_data, motorcycle_data
 
     def test_stats_api(self):
         """Test stats API"""
@@ -117,14 +142,52 @@ class RechevILAPITester:
         return False
 
     def test_auth_apis(self):
-        """Test authentication APIs"""
+        """Test authentication APIs with demo credentials"""
         print("\n🔐 Testing Auth APIs...")
         
         # Test /auth/me without authentication (should fail)
         self.test_api_endpoint('GET', 'auth/me', 401, description="(No Auth)")
         
+        # Test with Demo Pro User session token
+        print("  Testing Demo Pro User authentication...")
+        original_token = self.session_token
+        self.session_token = "demo_pro_session_token"
+        
+        pro_user_data = self.test_api_endpoint('GET', 'auth/me', 200, description="(Demo Pro User)")
+        
+        if pro_user_data:
+            # Verify Pro user fields
+            user_plan = pro_user_data.get('plan', 'unknown')
+            user_id = pro_user_data.get('user_id', 'unknown')
+            
+            self.log_test("Demo Pro User plan", user_plan == 'pro', 
+                         f"Expected 'pro', got '{user_plan}'" if user_plan != 'pro' else f"User plan: {user_plan}")
+            self.log_test("Demo Pro User ID", user_id == 'demo-pro-user', 
+                         f"Expected 'demo-pro-user', got '{user_id}'" if user_id != 'demo-pro-user' else f"User ID: {user_id}")
+        
+        # Test with Free User session token
+        print("  Testing Free User authentication...")
+        self.session_token = "test_stripe_session_123"
+        
+        free_user_data = self.test_api_endpoint('GET', 'auth/me', 200, description="(Free User)")
+        
+        if free_user_data:
+            # Verify Free user fields
+            user_plan = free_user_data.get('plan', 'unknown')
+            user_id = free_user_data.get('user_id', 'unknown')
+            
+            self.log_test("Free User plan", user_plan == 'free', 
+                         f"Expected 'free', got '{user_plan}'" if user_plan != 'free' else f"User plan: {user_plan}")
+            self.log_test("Free User ID", user_id == 'test-stripe-user', 
+                         f"Expected 'test-stripe-user', got '{user_id}'" if user_id != 'test-stripe-user' else f"User ID: {user_id}")
+        
+        # Reset session token
+        self.session_token = original_token
+        
         # Test logout without authentication
         self.test_api_endpoint('POST', 'auth/logout', 200, description="(Logout No Auth)")
+        
+        return pro_user_data, free_user_data
 
     def test_protected_apis(self):
         """Test protected APIs (history, favorites) without auth"""
@@ -232,18 +295,18 @@ class RechevILAPITester:
 
     def run_all_tests(self):
         """Run all backend API tests"""
-        print("🚀 Starting Rechev IL Backend API Tests (Including Stripe Integration)")
+        print("🚀 Starting Rechev IL Backend API Tests (New Features Focus)")
         print(f"📍 Testing against: {self.base_url}")
         print("=" * 60)
 
-        # Test basic vehicle APIs
-        vehicle_data, full_data = self.test_vehicle_apis()
+        # Test basic vehicle APIs (including new motorcycle and price features)
+        vehicle_data, car_data, motorcycle_data = self.test_vehicle_apis()
         
         # Test stats API
         stats_data = self.test_stats_api()
         
-        # Test auth APIs
-        self.test_auth_apis()
+        # Test auth APIs (including demo Pro and Free users)
+        pro_user_data, free_user_data = self.test_auth_apis()
         
         # Test protected APIs
         self.test_protected_apis()
@@ -263,6 +326,17 @@ class RechevILAPITester:
         # Print summary
         print("\n" + "=" * 60)
         print(f"📊 Test Summary: {self.tests_passed}/{self.tests_run} tests passed")
+        
+        # Print key findings for new features
+        print("\n🔍 New Features Summary:")
+        if car_data:
+            print(f"   🚗 Car (1234567): is_motorcycle={car_data.get('is_motorcycle', 'N/A')}, has_price={car_data.get('price') is not None}")
+        if motorcycle_data:
+            print(f"   🏍️  Motorcycle (21076803): is_motorcycle={motorcycle_data.get('is_motorcycle', 'N/A')}, has_price={motorcycle_data.get('price') is not None}")
+        if pro_user_data:
+            print(f"   👤 Demo Pro User: plan={pro_user_data.get('plan', 'N/A')}, user_id={pro_user_data.get('user_id', 'N/A')}")
+        if free_user_data:
+            print(f"   👤 Free User: plan={free_user_data.get('plan', 'N/A')}, user_id={free_user_data.get('user_id', 'N/A')}")
         
         if self.tests_passed == self.tests_run:
             print("🎉 All tests passed!")

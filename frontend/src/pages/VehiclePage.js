@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Shield, FileText, Accessibility, Heart, Share2, ArrowRight, Lock, Search } from 'lucide-react';
+import { Shield, FileText, Accessibility, Heart, Share2, ArrowRight, Lock, Search, DollarSign, Bike } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
@@ -12,16 +12,16 @@ const API = `${BACKEND_URL}/api`;
 const fadeUp = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
 const slideIn = { hidden: { opacity: 0, x: 30 }, show: { opacity: 1, x: 0, transition: { duration: 0.4 } } };
 
-function LicensePlateDisplay({ plate }) {
+function LicensePlateDisplay({ plate, isMotorcycle }) {
   const formatted = plate.length === 7
     ? `${plate.slice(0,2)}-${plate.slice(2,5)}-${plate.slice(5,7)}`
     : plate.length === 8
     ? `${plate.slice(0,3)}-${plate.slice(3,5)}-${plate.slice(5,8)}`
     : plate;
   return (
-    <div className="license-plate max-w-xs mx-auto text-2xl sm:text-3xl" data-testid="license-plate-display">
-      <div className="il-strip">
-        <span className="text-[8px]">🇮🇱</span>
+    <div className={`license-plate max-w-xs mx-auto text-2xl sm:text-3xl ${isMotorcycle ? '!border-orange-500/60' : ''}`} data-testid="license-plate-display">
+      <div className={`il-strip ${isMotorcycle ? '!bg-gradient-to-b !from-orange-600 !to-orange-800' : ''}`}>
+        <span className="text-[8px]">{isMotorcycle ? '🏍️' : '🇮🇱'}</span>
         <span>IL</span>
       </div>
       <div className="plate-number">{formatted}</div>
@@ -64,6 +64,93 @@ function FieldRow({ label, value, locked }) {
   );
 }
 
+function formatPrice(num) {
+  if (!num && num !== 0) return '—';
+  return '₪' + Number(num).toLocaleString('he-IL');
+}
+
+function PriceCard({ price, isPro, navigate }) {
+  if (!price) {
+    return (
+      <motion.div variants={fadeUp} initial="hidden" animate="show" className="glass-card p-5 mb-4 hover:translate-y-0 border-r-4 border-r-amber-500/30" data-testid="price-card-empty">
+        <div className="flex items-center gap-2 mb-3">
+          <DollarSign className="w-5 h-5 text-amber-400" />
+          <h3 className="font-rubik font-semibold text-sm text-white/40 uppercase tracking-wider">שווי רכב משוער</h3>
+        </div>
+        <p className="text-sm text-white/40">מחיר מחירון לא זמין לדגם זה</p>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div variants={fadeUp} initial="hidden" animate="show" className="glass-card p-5 mb-4 hover:translate-y-0 border-r-4 border-r-amber-500/50" data-testid="price-card">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <DollarSign className="w-5 h-5 text-amber-400" />
+          <h3 className="font-rubik font-semibold text-sm text-white/40 uppercase tracking-wider">שווי רכב משוער</h3>
+        </div>
+        {!isPro && <span className="text-xs bg-amber-600/20 text-amber-400 px-2 py-1 rounded-full">Pro</span>}
+      </div>
+
+      {isPro ? (
+        <div>
+          <div className="flex justify-between items-center py-2 border-b border-white/5">
+            <span className="text-sm text-white/50">מחיר מחירון (כחדש)</span>
+            <span className="text-sm font-medium">
+              {price.original_price_min === price.original_price_max
+                ? formatPrice(price.original_price_min)
+                : `${formatPrice(price.original_price_min)} — ${formatPrice(price.original_price_max)}`}
+            </span>
+          </div>
+          {price.importers?.length > 0 && (
+            <div className="flex justify-between items-center py-2 border-b border-white/5">
+              <span className="text-sm text-white/50">יבואן</span>
+              <span className="text-sm font-medium">{price.importers.join(', ')}</span>
+            </div>
+          )}
+          <div className="flex justify-between items-center py-2 border-b border-white/5">
+            <span className="text-sm text-white/50">פחת ({price.age_years} שנים)</span>
+            <span className="text-sm font-medium text-red-400">-{price.depreciation_pct}%</span>
+          </div>
+          <div className="mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+            <div className="text-xs text-amber-400/70 mb-1">שווי משוער</div>
+            <div className="text-xl font-rubik font-bold text-amber-400" data-testid="estimated-value">
+              {formatPrice(price.estimated_low)} — {formatPrice(price.estimated_high)}
+            </div>
+          </div>
+          {price.trims?.length > 1 && (
+            <p className="text-xs text-white/25 mt-2">
+              * על בסיס {price.record_count} רמות גימור שונות
+            </p>
+          )}
+          <p className="text-xs text-white/20 mt-2">
+            הערכה מבוססת על מחירון יבואן רשמי ופחת ממוצע
+          </p>
+        </div>
+      ) : (
+        <div className="relative">
+          <div className="filter blur-sm pointer-events-none select-none">
+            <div className="py-2 border-b border-white/5 flex justify-between">
+              <span className="text-sm text-white/50">מחיר מחירון</span>
+              <span className="text-sm">₪XXX,XXX</span>
+            </div>
+            <div className="mt-3 p-3 rounded-xl bg-amber-500/10">
+              <div className="text-xl font-rubik font-bold text-amber-400">₪XX,XXX — ₪YY,YYY</div>
+            </div>
+          </div>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0e1a]/60 rounded-xl">
+            <Lock className="w-5 h-5 text-amber-400 mb-2" />
+            <p className="text-sm text-white/50 mb-3">שדרג ל-Pro לראות שווי</p>
+            <Button data-testid="upgrade-price-btn" onClick={() => navigate('/pricing')} size="sm" className="bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm">
+              שדרג ל-Pro — $5/חודש
+            </Button>
+          </div>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 export default function VehiclePage() {
   const { plate } = useParams();
   const navigate = useNavigate();
@@ -81,11 +168,12 @@ export default function VehiclePage() {
         // Save to history if logged in
         if (user) {
           try {
+            const veh = resp.data.vehicle || {};
             await axios.post(`${API}/history`, {
               plate: plate,
-              manufacturer: resp.data.vehicle?.tozeret_nm || '',
-              model: resp.data.vehicle?.kinuy_mishari || '',
-              year: resp.data.vehicle?.shnat_yitzur || null,
+              manufacturer: veh.tozeret_nm || '',
+              model: veh.kinuy_mishari || veh.degem_nm || '',
+              year: veh.shnat_yitzur || null,
               source: 'manual'
             }, { withCredentials: true });
           } catch { /* ignore history save errors */ }
@@ -105,6 +193,7 @@ export default function VehiclePage() {
 
   const v = data?.vehicle || {};
   const isPro = user?.plan === 'pro';
+  const isMotorcycle = data?.is_motorcycle || false;
 
   const isTestValid = () => {
     if (!v.tokef_dt) return null;
@@ -129,12 +218,22 @@ export default function VehiclePage() {
       await axios.post(`${API}/favorites`, {
         plate,
         manufacturer: v.tozeret_nm || '',
-        model: v.kinuy_mishari || '',
+        model: v.kinuy_mishari || v.degem_nm || '',
         year: v.shnat_yitzur || null,
         color: v.tzeva_rechev || '',
         test_expiry: v.tokef_dt || ''
       }, { withCredentials: true });
     } catch { /* ignore */ }
+  };
+
+  // Build disability detail string
+  const disabilityDetail = () => {
+    const d = data?.disability;
+    if (!d?.has_disability_tag) return null;
+    const parts = [];
+    if (d.tag_type) parts.push(`סוג: ${d.tag_type}`);
+    if (d.issue_date) parts.push(`הונפק: ${d.issue_date}`);
+    return parts.join(' · ') || null;
   };
 
   if (loading) {
@@ -169,17 +268,26 @@ export default function VehiclePage() {
     );
   }
 
+  const accentColor = isMotorcycle ? 'orange' : 'blue';
+
   return (
     <div className="min-h-screen ambient-bg pt-20 px-4 pb-safe" data-testid="vehicle-page">
       <div className="max-w-2xl mx-auto">
         {/* License Plate */}
         <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="mb-8">
-          <LicensePlateDisplay plate={plate} />
-          {v.tozeret_nm && (
-            <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { delay: 0.3 } }} className="text-center mt-3 text-white/50 text-sm">
-              {v.tozeret_nm} {v.kinuy_mishari} {v.shnat_yitzur}
-            </motion.p>
-          )}
+          <LicensePlateDisplay plate={plate} isMotorcycle={isMotorcycle} />
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { delay: 0.3 } }} className="text-center mt-3">
+            {isMotorcycle && (
+              <span className="inline-flex items-center gap-1.5 bg-orange-500/20 text-orange-400 text-xs px-3 py-1 rounded-full mb-2 font-medium" data-testid="motorcycle-badge">
+                <Bike className="w-3.5 h-3.5" /> דו-גלגלי
+              </span>
+            )}
+            {(v.tozeret_nm || v.degem_nm) && (
+              <p className="text-white/50 text-sm">
+                {v.tozeret_nm} {v.kinuy_mishari || v.degem_nm} {v.shnat_yitzur}
+              </p>
+            )}
+          </motion.div>
         </motion.div>
 
         {/* Status Cards */}
@@ -200,42 +308,66 @@ export default function VehiclePage() {
           <StatusCard
             type={data.disability?.has_disability_tag ? 'disability' : 'none'}
             title="תו נכה"
-            value={data.disability?.has_disability_tag ? 'קיים' : 'לא נמצא'}
+            value={data.disability?.has_disability_tag ? 'תו נכה פעיל' : 'לא נמצא'}
+            detail={disabilityDetail()}
             icon={<Accessibility className="w-5 h-5" />}
           />
         </motion.div>
+
+        {/* Vehicle Value Card */}
+        {!isMotorcycle && (
+          <PriceCard price={data.price} isPro={isPro} navigate={navigate} />
+        )}
 
         {/* Vehicle Details - Basic */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" className="glass-card p-5 mb-4 hover:translate-y-0" data-testid="basic-details">
           <h3 className="font-rubik font-semibold mb-3 text-sm text-white/40 uppercase tracking-wider">פרטים בסיסיים</h3>
           <FieldRow label="יצרן" value={v.tozeret_nm} />
-          <FieldRow label="דגם" value={v.kinuy_mishari} />
+          <FieldRow label="דגם" value={isMotorcycle ? v.degem_nm : v.kinuy_mishari} />
           <FieldRow label="שנת ייצור" value={v.shnat_yitzur} />
-          <FieldRow label="צבע" value={v.tzeva_rechev} />
+          {!isMotorcycle && <FieldRow label="צבע" value={v.tzeva_rechev} />}
+          {isMotorcycle && <FieldRow label="ארץ ייצור" value={v.tozeret_eretz_nm} />}
           <FieldRow label="סוג דלק" value={v.sug_delek_nm} />
           <FieldRow label="בעלות" value={v.baalut} />
-          <FieldRow label="מועד עלייה לכביש" value={v.moed_aliya_lakvish ? new Date(v.moed_aliya_lakvish).toLocaleDateString('he-IL') : null} />
+          <FieldRow label="סוג רכב" value={v.sug_rechev_nm} />
+          <FieldRow label="מועד עלייה לכביש" value={v.moed_aliya_lakvish} />
+          {isMotorcycle && <FieldRow label="מקוריות" value={v.mkoriut_nm} />}
         </motion.div>
 
-        {/* Vehicle Details - Pro */}
+        {/* Vehicle Details - Pro / Extended */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" className="glass-card p-5 mb-6 hover:translate-y-0" data-testid="pro-details">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-rubik font-semibold text-sm text-white/40 uppercase tracking-wider">פרטים מורחבים</h3>
-            {!isPro && <span className="text-xs bg-blue-600/20 text-blue-400 px-2 py-1 rounded-full">Pro</span>}
+            {!isPro && <span className={`text-xs ${isMotorcycle ? 'bg-orange-600/20 text-orange-400' : 'bg-blue-600/20 text-blue-400'} px-2 py-1 rounded-full`}>Pro</span>}
           </div>
-          <FieldRow label="נפח מנוע (סמ״ק)" value={v.nefah_manoa} locked={!isPro} />
-          <FieldRow label="הספק (כ״ס)" value={v.horspower} locked={!isPro} />
-          <FieldRow label="מספר מושבים" value={v.mispar_moshvim} locked={!isPro} />
-          <FieldRow label="משקל כולל" value={v.mishkal_kolel} locked={!isPro} />
-          <FieldRow label="תיבת הילוכים" value={v.automatic_ind === 'A' ? 'אוטומטי' : v.automatic_ind === 'M' ? 'ידני' : v.automatic_ind} locked={!isPro} />
-          <FieldRow label="הנעה" value={v.hanaa_nm} locked={!isPro} />
-          <FieldRow label="רמת גימור" value={v.ramat_gimur} locked={!isPro} />
-          <FieldRow label="קבוצת זיהום" value={v.kvutzat_zihum} locked={!isPro} />
-          <FieldRow label="סוג רכב" value={v.sug_rechev_nm} locked={!isPro} />
+          {isMotorcycle ? (
+            <>
+              <FieldRow label="נפח מנוע (סמ״ק)" value={v.nefach_manoa} locked={!isPro} />
+              <FieldRow label="הספק" value={v.hespek} locked={!isPro} />
+              <FieldRow label="משקל כולל" value={v.mishkal_kolel} locked={!isPro} />
+              <FieldRow label="צמיגים קדמיים" value={v.mida_zmig_kidmi} locked={!isPro} />
+              <FieldRow label="צמיגים אחוריים" value={v.mida_zmig_ahori} locked={!isPro} />
+              <FieldRow label="קוד מהירות צמיג קדמי" value={v.kod_mehirut_zmig_kidmi} locked={!isPro} />
+              <FieldRow label="קוד מהירות צמיג אחורי" value={v.kod_mehirut_zmig_ahori} locked={!isPro} />
+              <FieldRow label="מספר מסגרת" value={v.misgeret} locked={!isPro} />
+              <FieldRow label="מספר מנוע" value={v.mispar_manoa} locked={!isPro} />
+            </>
+          ) : (
+            <>
+              <FieldRow label="נפח מנוע (סמ״ק)" value={v.nefah_manoa} locked={!isPro} />
+              <FieldRow label="הספק (כ״ס)" value={v.horspower} locked={!isPro} />
+              <FieldRow label="מספר מושבים" value={v.mispar_moshvim} locked={!isPro} />
+              <FieldRow label="משקל כולל" value={v.mishkal_kolel} locked={!isPro} />
+              <FieldRow label="תיבת הילוכים" value={v.automatic_ind === 'A' ? 'אוטומטי' : v.automatic_ind === 'M' ? 'ידני' : v.automatic_ind} locked={!isPro} />
+              <FieldRow label="הנעה" value={v.hanaa_nm} locked={!isPro} />
+              <FieldRow label="רמת גימור" value={v.ramat_gimur} locked={!isPro} />
+              <FieldRow label="קבוצת זיהום" value={v.kvutzat_zihum} locked={!isPro} />
+            </>
+          )}
           {!isPro && (
             <div className="mt-4 text-center">
               <p className="text-sm text-white/40 mb-3">רוצה לראות את כל הפרטים?</p>
-              <Button data-testid="upgrade-pro-btn" onClick={() => navigate('/pricing')} size="sm" className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm">
+              <Button data-testid="upgrade-pro-btn" onClick={() => navigate('/pricing')} size="sm" className={`${isMotorcycle ? 'bg-orange-600 hover:bg-orange-500' : 'bg-blue-600 hover:bg-blue-500'} text-white rounded-xl text-sm`}>
                 שדרג ל-Pro — $5/חודש
               </Button>
             </div>
