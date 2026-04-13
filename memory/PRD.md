@@ -46,6 +46,13 @@ Build "רכב IL" (Rechev IL) - Israeli vehicle lookup and analysis web applicat
 - [x] Israeli license plate visual component
 - [x] Skeleton loading states
 
+### Phase 2 - Stripe + Features (April 13, 2026)
+- [x] Stripe payment integration for Pro ($5/month)
+- [x] Motorcycle/two-wheeler support (parallel search)
+- [x] Vehicle estimated value (price list + depreciation calc, Pro feature)
+- [x] Fixed disability tag API (corrected resource_id + field name)
+- [x] Demo Pro test user created
+
 ## Prioritized Backlog
 
 ### P0 (Critical)
