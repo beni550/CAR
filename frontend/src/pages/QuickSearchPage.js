@@ -46,7 +46,7 @@ export default function QuickSearchPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0e1a] flex flex-col items-center justify-center px-4" data-testid="quick-search-page">
+    <div className="min-h-screen ambient-bg flex flex-col items-center justify-center px-4" data-testid="quick-search-page">
       <input ref={cameraRef} type="file" accept="image/*" capture="environment" onChange={handleImage} className="hidden" />
       <input ref={galleryRef} type="file" accept="image/*" onChange={handleImage} className="hidden" />
 

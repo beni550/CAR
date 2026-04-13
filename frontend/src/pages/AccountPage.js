@@ -1,15 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { User, Mail, Calendar, Crown, LogOut, BarChart3, CreditCard, Loader2 } from 'lucide-react';
+import { User, Mail, Calendar, Crown, LogOut, BarChart3, CreditCard, Loader2, Sun, Moon } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 import axios from 'axios';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
+
+function ThemeToggleRow() {
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <button onClick={toggleTheme} className="w-full text-right p-3 rounded-xl hover:bg-white/5 transition-colors flex items-center gap-3" data-testid="theme-toggle-account">
+      {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-400" /> : <Moon className="w-5 h-5 text-blue-500" />}
+      <span className="text-sm flex-1">{theme === 'dark' ? 'מצב בהיר' : 'מצב כהה'}</span>
+      <span className="text-xs text-white/30">{theme === 'dark' ? 'כהה' : 'בהיר'}</span>
+    </button>
+  );
+}
 
 export default function AccountPage() {
   const { user, logout, loading: authLoading, checkAuth } = useAuth();
@@ -150,8 +162,9 @@ export default function AccountPage() {
 
           {/* Quick Links */}
           <motion.div variants={fadeUp} className="glass-card p-5 mb-4 hover:translate-y-0" data-testid="account-links">
-            <h3 className="font-rubik font-semibold text-sm text-white/40 uppercase tracking-wider mb-4">ניווט מהיר</h3>
+            <h3 className="font-rubik font-semibold text-sm text-white/40 uppercase tracking-wider mb-4">הגדרות</h3>
             <div className="space-y-2">
+              <ThemeToggleRow />
               <button onClick={() => navigate('/history')} className="w-full text-right p-3 rounded-xl hover:bg-white/5 transition-colors flex items-center gap-3" data-testid="go-history">
                 <BarChart3 className="w-5 h-5 text-blue-400" />
                 <span className="text-sm">היסטוריית חיפושים</span>
