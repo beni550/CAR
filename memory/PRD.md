@@ -52,6 +52,8 @@ Build "רכב IL" (Rechev IL) - Israeli vehicle lookup and analysis web applicat
 - [x] Vehicle estimated value (price list + depreciation calc, Pro feature)
 - [x] Fixed disability tag API (corrected resource_id + field name)
 - [x] Demo Pro test user created
+- [x] Email/password registration and login (alongside Google Auth)
+- [x] Fixed Stripe Pro upgrade flow for logged-in users
 
 ## Prioritized Backlog
 
