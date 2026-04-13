@@ -41,7 +41,7 @@ export default function PricingPage() {
 
   const handleUpgrade = async () => {
     if (!user) {
-      login();
+      navigate('/login');
       return;
     }
     if (isPro) return;
@@ -52,9 +52,12 @@ export default function PricingPage() {
       const resp = await axios.post(`${API}/checkout/create`, { origin_url: originUrl }, { withCredentials: true });
       if (resp.data.url) {
         window.location.href = resp.data.url;
+      } else {
+        setUpgradeLoading(false);
       }
     } catch (err) {
       console.error('Checkout error:', err);
+      alert('שגיאה ביצירת תשלום. נסה שוב.');
       setUpgradeLoading(false);
     }
   };

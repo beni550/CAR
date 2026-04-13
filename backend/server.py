@@ -8,6 +8,7 @@ import logging
 import uuid
 import base64
 import httpx
+import bcrypt
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
@@ -67,6 +68,13 @@ class FavoriteItem(BaseModel):
     added_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 # --- Auth Helpers ---
+def hash_password(password: str) -> str:
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+
 async def get_current_user(request: Request) -> Optional[dict]:
     session_token = request.cookies.get("session_token")
     if not session_token:
@@ -86,6 +94,8 @@ async def get_current_user(request: Request) -> Optional[dict]:
     if expires_at < datetime.now(timezone.utc):
         return None
     user_doc = await db.users.find_one({"user_id": session_doc["user_id"]}, {"_id": 0})
+    if user_doc:
+        user_doc.pop("password_hash", None)
     return user_doc
 
 async def require_auth(request: Request) -> dict:
@@ -93,6 +103,27 @@ async def require_auth(request: Request) -> dict:
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user
+
+def _create_session_cookie(response: Response, session_token: str):
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="none",
+        max_age=7 * 24 * 3600
+    )
+
+# --- Email/Password Auth Models ---
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 # --- Auth Endpoints ---
 @api_router.get("/auth/session")
@@ -144,7 +175,83 @@ async def exchange_session(session_id: str, response: Response):
     )
 
     user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if user_doc:
+        user_doc.pop("password_hash", None)
     return user_doc
+
+# --- Email/Password Auth ---
+@api_router.post("/auth/register")
+async def register(body: RegisterRequest, response: Response):
+    email = body.email.strip().lower()
+    name = body.name.strip()
+    password = body.password
+
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="הסיסמה חייבת להכיל לפחות 6 תווים")
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="אימייל לא תקין")
+    if not name:
+        raise HTTPException(status_code=400, detail="שם נדרש")
+
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=409, detail="אימייל כבר רשום. נסה להתחבר.")
+
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    password_hash = hash_password(password)
+
+    await db.users.insert_one({
+        "user_id": user_id,
+        "email": email,
+        "name": name,
+        "password_hash": password_hash,
+        "picture": "",
+        "plan": "free",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    session_token = str(uuid.uuid4())
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    _create_session_cookie(response, session_token)
+
+    user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    user_doc.pop("password_hash", None)
+    return user_doc
+
+@api_router.post("/auth/login")
+async def login_email(body: LoginRequest, response: Response):
+    email = body.email.strip().lower()
+    password = body.password
+
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="אימייל או סיסמה שגויים")
+
+    password_hash = user.get("password_hash")
+    if not password_hash:
+        raise HTTPException(status_code=401, detail="חשבון זה משתמש בהתחברות עם Google")
+
+    if not verify_password(password, password_hash):
+        raise HTTPException(status_code=401, detail="אימייל או סיסמה שגויים")
+
+    session_token = str(uuid.uuid4())
+    await db.user_sessions.insert_one({
+        "user_id": user["user_id"],
+        "session_token": session_token,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    _create_session_cookie(response, session_token)
+
+    user.pop("password_hash", None)
+    return user
 
 @api_router.get("/auth/me")
 async def get_me(request: Request):
@@ -653,6 +760,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def seed_demo_pro_user():
+    """Seed a demo Pro user with email/password on startup."""
+    demo_email = "pro@rechev.il"
+    demo_password = "pro123456"
+    demo_name = "Pro User"
+
+    existing = await db.users.find_one({"email": demo_email}, {"_id": 0})
+    if existing:
+        # Update password hash if needed
+        if not existing.get("password_hash") or not verify_password(demo_password, existing.get("password_hash", "")):
+            await db.users.update_one(
+                {"email": demo_email},
+                {"$set": {"password_hash": hash_password(demo_password), "plan": "pro",
+                          "subscription_end": (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()}}
+            )
+        logger.info(f"Demo Pro user exists: {demo_email}")
+    else:
+        user_id = f"user_demo_pro"
+        await db.users.insert_one({
+            "user_id": user_id,
+            "email": demo_email,
+            "name": demo_name,
+            "password_hash": hash_password(demo_password),
+            "picture": "",
+            "plan": "pro",
+            "subscription_id": "demo_subscription",
+            "subscription_end": (datetime.now(timezone.utc) + timedelta(days=365)).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+        logger.info(f"Created demo Pro user: {demo_email} / {demo_password}")
+
+    # Create unique email index
+    try:
+        await db.users.create_index("email", unique=True)
+    except Exception:
+        pass
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

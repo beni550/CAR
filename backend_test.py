@@ -142,52 +142,121 @@ class RechevILAPITester:
         return False
 
     def test_auth_apis(self):
-        """Test authentication APIs with demo credentials"""
-        print("\n🔐 Testing Auth APIs...")
+        """Test authentication APIs with email/password and demo credentials"""
+        print("\n🔐 Testing Email/Password Auth APIs...")
         
         # Test /auth/me without authentication (should fail)
         self.test_api_endpoint('GET', 'auth/me', 401, description="(No Auth)")
         
-        # Test with Demo Pro User session token
-        print("  Testing Demo Pro User authentication...")
-        original_token = self.session_token
-        self.session_token = "demo_pro_session_token"
+        # Test registration with valid data
+        print("  Testing user registration...")
+        import time
+        unique_email = f"test{int(time.time())}@test.com"
+        register_data = {
+            "name": "Test User",
+            "email": unique_email,
+            "password": "test123456"
+        }
         
-        pro_user_data = self.test_api_endpoint('GET', 'auth/me', 200, description="(Demo Pro User)")
+        register_response = self.test_api_endpoint('POST', 'auth/register', 200, 
+                                                 data=register_data, description="(Register Valid User)")
         
-        if pro_user_data:
-            # Verify Pro user fields
-            user_plan = pro_user_data.get('plan', 'unknown')
-            user_id = pro_user_data.get('user_id', 'unknown')
+        if register_response:
+            # Verify registration response
+            has_user_id = 'user_id' in register_response
+            has_email = register_response.get('email') == unique_email
+            has_name = register_response.get('name') == "Test User"
+            plan_is_free = register_response.get('plan') == 'free'
+            no_password_hash = 'password_hash' not in register_response
             
-            self.log_test("Demo Pro User plan", user_plan == 'pro', 
+            self.log_test("Register returns user_id", has_user_id, 
+                         "Missing user_id in response" if not has_user_id else "")
+            self.log_test("Register returns correct email", has_email, 
+                         f"Expected {unique_email}, got {register_response.get('email')}" if not has_email else "")
+            self.log_test("Register returns correct name", has_name, 
+                         f"Expected 'Test User', got {register_response.get('name')}" if not has_name else "")
+            self.log_test("Register sets plan to free", plan_is_free, 
+                         f"Expected 'free', got {register_response.get('plan')}" if not plan_is_free else "")
+            self.log_test("Register excludes password_hash", no_password_hash, 
+                         "password_hash should not be in response" if not no_password_hash else "")
+        
+        # Test registration with duplicate email (should fail)
+        duplicate_data = {
+            "name": "Duplicate User",
+            "email": unique_email,
+            "password": "test123456"
+        }
+        self.test_api_endpoint('POST', 'auth/register', 409, 
+                             data=duplicate_data, description="(Register Duplicate Email)")
+        
+        # Test registration with short password (should fail)
+        short_password_data = {
+            "name": "Short Pass User",
+            "email": f"short{int(time.time())}@test.com",
+            "password": "12345"  # Less than 6 chars
+        }
+        self.test_api_endpoint('POST', 'auth/register', 400, 
+                             data=short_password_data, description="(Register Short Password)")
+        
+        # Test login with Demo Pro User
+        print("  Testing Demo Pro User login...")
+        demo_login_data = {
+            "email": "pro@rechev.il",
+            "password": "pro123456"
+        }
+        
+        demo_login_response = self.test_api_endpoint('POST', 'auth/login', 200, 
+                                                   data=demo_login_data, description="(Login Demo Pro)")
+        
+        if demo_login_response:
+            # Verify Demo Pro user fields
+            user_plan = demo_login_response.get('plan', 'unknown')
+            user_email = demo_login_response.get('email', 'unknown')
+            no_password_hash = 'password_hash' not in demo_login_response
+            
+            self.log_test("Demo Pro login plan", user_plan == 'pro', 
                          f"Expected 'pro', got '{user_plan}'" if user_plan != 'pro' else f"User plan: {user_plan}")
-            self.log_test("Demo Pro User ID", user_id == 'demo-pro-user', 
-                         f"Expected 'demo-pro-user', got '{user_id}'" if user_id != 'demo-pro-user' else f"User ID: {user_id}")
+            self.log_test("Demo Pro login email", user_email == 'pro@rechev.il', 
+                         f"Expected 'pro@rechev.il', got '{user_email}'" if user_email != 'pro@rechev.il' else "")
+            self.log_test("Demo Pro login excludes password_hash", no_password_hash, 
+                         "password_hash should not be in response" if not no_password_hash else "")
         
-        # Test with Free User session token
-        print("  Testing Free User authentication...")
-        self.session_token = "test_stripe_session_123"
+        # Test login with registered user
+        print("  Testing registered user login...")
+        login_data = {
+            "email": unique_email,
+            "password": "test123456"
+        }
         
-        free_user_data = self.test_api_endpoint('GET', 'auth/me', 200, description="(Free User)")
+        login_response = self.test_api_endpoint('POST', 'auth/login', 200, 
+                                              data=login_data, description="(Login Registered User)")
         
-        if free_user_data:
-            # Verify Free user fields
-            user_plan = free_user_data.get('plan', 'unknown')
-            user_id = free_user_data.get('user_id', 'unknown')
-            
-            self.log_test("Free User plan", user_plan == 'free', 
-                         f"Expected 'free', got '{user_plan}'" if user_plan != 'free' else f"User plan: {user_plan}")
-            self.log_test("Free User ID", user_id == 'test-stripe-user', 
-                         f"Expected 'test-stripe-user', got '{user_id}'" if user_id != 'test-stripe-user' else f"User ID: {user_id}")
+        # Test login with wrong password (should fail)
+        wrong_password_data = {
+            "email": unique_email,
+            "password": "wrongpassword"
+        }
+        self.test_api_endpoint('POST', 'auth/login', 401, 
+                             data=wrong_password_data, description="(Login Wrong Password)")
         
-        # Reset session token
-        self.session_token = original_token
+        # Test login with non-existent email (should fail)
+        nonexistent_data = {
+            "email": "nonexistent@test.com",
+            "password": "test123456"
+        }
+        self.test_api_endpoint('POST', 'auth/login', 401, 
+                             data=nonexistent_data, description="(Login Non-existent Email)")
         
-        # Test logout without authentication
-        self.test_api_endpoint('POST', 'auth/logout', 200, description="(Logout No Auth)")
+        # Test /auth/me with session cookie (simulate cookie-based auth)
+        print("  Testing /auth/me endpoint...")
+        # Note: We can't easily test cookie-based auth in this script, 
+        # but we can test that the endpoint exists and responds correctly to missing auth
+        self.test_api_endpoint('GET', 'auth/me', 401, description="(Get Me - No Session)")
         
-        return pro_user_data, free_user_data
+        # Test logout
+        self.test_api_endpoint('POST', 'auth/logout', 200, description="(Logout)")
+        
+        return demo_login_response, login_response
 
     def test_protected_apis(self):
         """Test protected APIs (history, favorites) without auth"""
@@ -305,8 +374,8 @@ class RechevILAPITester:
         # Test stats API
         stats_data = self.test_stats_api()
         
-        # Test auth APIs (including demo Pro and Free users)
-        pro_user_data, free_user_data = self.test_auth_apis()
+        # Test auth APIs (including email/password registration and demo Pro user)
+        demo_login_response, login_response = self.test_auth_apis()
         
         # Test protected APIs
         self.test_protected_apis()
@@ -328,15 +397,15 @@ class RechevILAPITester:
         print(f"📊 Test Summary: {self.tests_passed}/{self.tests_run} tests passed")
         
         # Print key findings for new features
-        print("\n🔍 New Features Summary:")
+        print("\n🔍 Email/Password Auth Features Summary:")
+        if demo_login_response:
+            print(f"   👤 Demo Pro User: plan={demo_login_response.get('plan', 'N/A')}, email={demo_login_response.get('email', 'N/A')}")
+        if login_response:
+            print(f"   👤 Registered User: plan={login_response.get('plan', 'N/A')}, email={login_response.get('email', 'N/A')}")
         if car_data:
             print(f"   🚗 Car (1234567): is_motorcycle={car_data.get('is_motorcycle', 'N/A')}, has_price={car_data.get('price') is not None}")
         if motorcycle_data:
             print(f"   🏍️  Motorcycle (21076803): is_motorcycle={motorcycle_data.get('is_motorcycle', 'N/A')}, has_price={motorcycle_data.get('price') is not None}")
-        if pro_user_data:
-            print(f"   👤 Demo Pro User: plan={pro_user_data.get('plan', 'N/A')}, user_id={pro_user_data.get('user_id', 'N/A')}")
-        if free_user_data:
-            print(f"   👤 Free User: plan={free_user_data.get('plan', 'N/A')}, user_id={free_user_data.get('user_id', 'N/A')}")
         
         if self.tests_passed == self.tests_run:
             print("🎉 All tests passed!")
