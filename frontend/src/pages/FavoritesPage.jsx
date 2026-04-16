@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Heart, Trash2, Search, RefreshCw } from 'lucide-react';
+import { Heart, Trash2, Search, RefreshCw, Car } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
@@ -56,12 +56,25 @@ export default function FavoritesPage() {
         </h1>
 
         {favorites.length === 0 ? (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-10 text-center" data-testid="favorites-empty">
-            <Heart className="w-12 h-12 text-white/20 mx-auto mb-4" />
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-10 text-center hover:translate-y-0" data-testid="favorites-empty">
+            {/* Illustrated empty state */}
+            <div className="w-24 h-24 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-6">
+              <div className="relative">
+                <Car className="w-12 h-12 text-red-400/30" />
+                <motion.div
+                  className="absolute -top-1 -left-1"
+                  animate={{ scale: [1, 1.3, 1] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                >
+                  <Heart className="w-5 h-5 text-red-400/60 fill-red-400/40" />
+                </motion.div>
+              </div>
+            </div>
             <h3 className="font-rubik font-semibold text-lg mb-2">אין רכבים שמורים</h3>
-            <p className="text-white/40 text-sm mb-6">שמור רכבים שמעניינים אותך כאן</p>
+            <p className="text-white/40 text-sm mb-2">שמור רכבים שמעניינים אותך כאן</p>
+            <p className="text-white/30 text-xs mb-6">לחץ על כפתור ה-❤️ בדף הרכב כדי לשמור</p>
             <Button data-testid="search-vehicle-btn" onClick={() => navigate('/')} className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl">
-              <Search className="w-4 h-4 ml-2" /> חפש רכב
+              <Search className="w-4 h-4 ml-2" /> חפש את הרכב הראשון שלך
             </Button>
           </motion.div>
         ) : (

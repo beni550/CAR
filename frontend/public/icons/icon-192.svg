@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="32" fill="#0a0e1a"/>
+  <rect x="36" y="66" width="120" height="60" rx="8" fill="#FFCC00" stroke="#1a1a1a" stroke-width="4"/>
+  <rect x="36" y="66" width="30" height="60" rx="4" fill="#003399"/>
+  <text x="51" y="100" font-family="Arial,sans-serif" font-size="14" fill="white" text-anchor="middle" font-weight="bold">IL</text>
+  <text x="111" y="104" font-family="Arial,sans-serif" font-size="24" fill="#1a1a1a" text-anchor="middle" font-weight="bold" letter-spacing="4">12-345</text>
+  <circle cx="96" cy="40" r="16" fill="rgba(59,130,246,0.3)"/>
+  <text x="96" y="46" font-family="Arial,sans-serif" font-size="18" fill="#3b82f6" text-anchor="middle">🚗</text>
+  <text x="96" y="155" font-family="Arial,sans-serif" font-size="18" fill="white" text-anchor="middle" font-weight="bold">רכב IL</text>
+</svg>

@@ -6,7 +6,7 @@ import { Button } from '../components/ui/button';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
@@ -70,12 +70,25 @@ export default function HistoryPage() {
         </div>
 
         {history.length === 0 ? (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-10 text-center" data-testid="history-empty">
-            <Clock className="w-12 h-12 text-white/20 mx-auto mb-4" />
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-10 text-center hover:translate-y-0" data-testid="history-empty">
+            {/* Illustrated empty state */}
+            <div className="w-24 h-24 rounded-full bg-blue-500/10 flex items-center justify-center mx-auto mb-6">
+              <div className="relative">
+                <Clock className="w-12 h-12 text-blue-400/40" />
+                <motion.div
+                  className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-blue-500/20 flex items-center justify-center"
+                  animate={{ scale: [1, 1.2, 1] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                >
+                  <Search className="w-3 h-3 text-blue-400" />
+                </motion.div>
+              </div>
+            </div>
             <h3 className="font-rubik font-semibold text-lg mb-2">עוד לא חיפשת כלום</h3>
-            <p className="text-white/40 text-sm mb-6">בוא נתחיל!</p>
+            <p className="text-white/40 text-sm mb-2">כל חיפוש שתבצע יישמר כאן אוטומטית</p>
+            <p className="text-white/30 text-xs mb-6">כך תוכל לחזור לרכבים שבדקת בקלות</p>
             <Button data-testid="start-search-btn" onClick={() => navigate('/')} className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl">
-              <Search className="w-4 h-4 ml-2" /> חפש רכב
+              <Search className="w-4 h-4 ml-2" /> חפש את הרכב הראשון שלך
             </Button>
           </motion.div>
         ) : (

@@ -9,10 +9,13 @@ import uuid
 import base64
 import httpx
 import bcrypt
+import asyncio
+import time
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -29,6 +32,13 @@ api_router = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+try:
+    import stripe
+    HAS_STRIPE = True
+except ImportError:
+    stripe = None
+    HAS_STRIPE = False
+
 # --- data.gov.il API config ---
 VEHICLE_RESOURCE_ID = "053cea08-09bc-40ec-8f7a-156f0677aff3"
 MOTORCYCLE_RESOURCE_ID = "bf9df4e2-d90d-4c0a-a400-19e15af8e95f"
@@ -39,6 +49,121 @@ DATA_GOV_BASE = "https://data.gov.il/api/3/action/datastore_search"
 
 # Depreciation rates per year
 DEPRECIATION_RATES = [0.15, 0.12, 0.10, 0.08, 0.07, 0.06]  # years 1-6, then 5% per year after
+
+# ========== IN-MEMORY CACHE ==========
+_cache: Dict[str, dict] = {}
+CACHE_TTL = 300  # 5 minutes
+
+def cache_get(key: str):
+    entry = _cache.get(key)
+    if entry and time.time() - entry["ts"] < CACHE_TTL:
+        return entry["data"]
+    if entry:
+        del _cache[key]
+    return None
+
+def cache_set(key: str, data):
+    # Limit cache size to prevent memory issues
+    if len(_cache) > 5000:
+        oldest_keys = sorted(_cache, key=lambda k: _cache[k]["ts"])[:1000]
+        for k in oldest_keys:
+            del _cache[k]
+    _cache[key] = {"data": data, "ts": time.time()}
+
+# ========== RATE LIMITING (AI scans) ==========
+_ai_rate: Dict[str, dict] = {}  # user_id -> {count, reset_time}
+AI_DAILY_LIMIT = 10
+
+def check_ai_rate_limit(user_id: str, plan: str) -> bool:
+    """Returns True if allowed, False if rate limited. Pro users are unlimited."""
+    if plan == "pro":
+        return True
+    now = time.time()
+    entry = _ai_rate.get(user_id)
+    if not entry or now > entry["reset"]:
+        _ai_rate[user_id] = {"count": 1, "reset": now + 86400}
+        return True
+    if entry["count"] >= AI_DAILY_LIMIT:
+        return False
+    entry["count"] += 1
+    return True
+
+def get_ai_remaining(user_id: str, plan: str) -> int:
+    if plan == "pro":
+        return -1  # unlimited
+    entry = _ai_rate.get(user_id)
+    if not entry or time.time() > entry["reset"]:
+        return AI_DAILY_LIMIT
+    return max(0, AI_DAILY_LIMIT - entry["count"])
+
+# ========== RETRY HELPER ==========
+async def fetch_with_retry(client: httpx.AsyncClient, url: str, params: dict, retries: int = 3) -> httpx.Response:
+    """Fetch with exponential backoff retry."""
+    for attempt in range(retries):
+        try:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPStatusError as e:
+            # Don't retry on 404 (resource removed) or other client errors
+            if e.response.status_code < 500:
+                raise
+            if attempt == retries - 1:
+                raise
+            wait = (2 ** attempt) * 0.5
+            logger.warning(f"Retry {attempt + 1}/{retries} after {wait}s: {e}")
+            await asyncio.sleep(wait)
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            if attempt == retries - 1:
+                raise
+            wait = (2 ** attempt) * 0.5
+            logger.warning(f"Retry {attempt + 1}/{retries} after {wait}s: {e}")
+            await asyncio.sleep(wait)
+
+# ========== VEHICLE HEALTH SCORE ==========
+def calculate_vehicle_score(vehicle: dict, theft_data: list, test_valid: Optional[bool], age: int) -> dict:
+    """Calculate overall vehicle health score 0-100."""
+    score = 100
+    factors = []
+
+    # Theft check (-50 if stolen)
+    if len(theft_data) > 0:
+        score -= 50
+        factors.append({"name": "גניבה", "impact": -50, "status": "danger"})
+    else:
+        factors.append({"name": "גניבה", "impact": 0, "status": "good"})
+
+    # Test validity (-20 if expired, -10 if unknown)
+    if test_valid is False:
+        score -= 20
+        factors.append({"name": "טסט", "impact": -20, "status": "danger"})
+    elif test_valid is None:
+        score -= 10
+        factors.append({"name": "טסט", "impact": -10, "status": "warning"})
+    else:
+        factors.append({"name": "טסט", "impact": 0, "status": "good"})
+
+    # Age penalty (gradual, max -20)
+    if age > 0:
+        age_penalty = min(20, age * 2)
+        score -= age_penalty
+        status = "good" if age <= 3 else "warning" if age <= 8 else "danger"
+        factors.append({"name": "גיל", "impact": -age_penalty, "status": status})
+    else:
+        factors.append({"name": "גיל", "impact": 0, "status": "good"})
+
+    # Ownership (government/company cars slightly better)
+    baalut = vehicle.get("baalut", "")
+    if "ממשלתי" in str(baalut) or "ציבורי" in str(baalut):
+        factors.append({"name": "בעלות", "impact": 0, "status": "good"})
+    else:
+        factors.append({"name": "בעלות", "impact": 0, "status": "neutral"})
+
+    score = max(0, min(100, score))
+    label = "מצוין" if score >= 80 else "טוב" if score >= 60 else "בינוני" if score >= 40 else "נמוך"
+    color = "emerald" if score >= 80 else "blue" if score >= 60 else "amber" if score >= 40 else "red"
+
+    return {"score": score, "label": label, "color": color, "factors": factors}
 
 # --- Pydantic Models ---
 class UserOut(BaseModel):
@@ -66,6 +191,17 @@ class FavoriteItem(BaseModel):
     color: Optional[str] = None
     test_expiry: Optional[str] = None
     added_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class WatchlistItem(BaseModel):
+    plate: str
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    year: Optional[int] = None
+    alert_types: List[str] = Field(default_factory=lambda: ["theft", "test_expiry"])
+    added_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class CompareRequest(BaseModel):
+    plates: List[str]
 
 # --- Auth Helpers ---
 def hash_password(password: str) -> str:
@@ -128,14 +264,10 @@ class LoginRequest(BaseModel):
 # --- Auth Endpoints ---
 @api_router.get("/auth/session")
 async def exchange_session(session_id: str, response: Response):
-    async with httpx.AsyncClient() as http_client:
-        resp = await http_client.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id}
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=401, detail="Invalid session")
-        data = resp.json()
+    # Google OAuth via Emergent has been removed.
+    # To add Google OAuth, set up Google Cloud Console credentials
+    # and implement the OAuth2 flow directly.
+    raise HTTPException(status_code=503, detail="Google OAuth is not configured. Please use email/password login.")
 
     email = data["email"]
     name = data.get("name", "")
@@ -273,21 +405,26 @@ async def search_vehicle(plate: str):
     if not plate_clean or len(plate_clean) < 5 or len(plate_clean) > 8:
         raise HTTPException(status_code=400, detail="Invalid plate number")
 
+    # Check cache
+    cache_key = f"vehicle:{plate_clean}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
     plate_num = int(plate_clean)
     async with httpx.AsyncClient(timeout=15.0) as http_client:
-        resp = await http_client.get(
-            DATA_GOV_BASE,
-            params={
-                "resource_id": VEHICLE_RESOURCE_ID,
-                "filters": f'{{"mispar_rechev":{plate_num}}}',
-                "limit": 1
-            }
-        )
+        resp = await fetch_with_retry(http_client, DATA_GOV_BASE, {
+            "resource_id": VEHICLE_RESOURCE_ID,
+            "filters": f'{{"mispar_rechev":{plate_num}}}',
+            "limit": 1
+        })
     data = resp.json()
     records = data.get("result", {}).get("records", [])
     if not records:
         raise HTTPException(status_code=404, detail="Vehicle not found")
-    return {"vehicle": records[0]}
+    result = {"vehicle": records[0]}
+    cache_set(cache_key, result)
+    return result
 
 @api_router.get("/vehicle/theft")
 async def check_theft(plate: str):
@@ -296,18 +433,19 @@ async def check_theft(plate: str):
         raise HTTPException(status_code=400, detail="Invalid plate number")
 
     plate_num = int(plate_clean)
-    async with httpx.AsyncClient(timeout=15.0) as http_client:
-        resp = await http_client.get(
-            DATA_GOV_BASE,
-            params={
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http_client:
+            resp = await fetch_with_retry(http_client, DATA_GOV_BASE, {
                 "resource_id": THEFT_RESOURCE_ID,
                 "filters": f'{{"MISPAR_RECHEV":{plate_num}}}',
                 "limit": 1
-            }
-        )
-    data = resp.json()
-    records = data.get("result", {}).get("records", [])
-    return {"stolen": len(records) > 0, "records": records}
+            })
+        data = resp.json()
+        records = data.get("result", {}).get("records", [])
+        return {"stolen": len(records) > 0, "records": records}
+    except Exception as e:
+        logger.warning(f"Theft API unavailable: {e}")
+        return {"stolen": False, "records": [], "unavailable": True}
 
 @api_router.get("/vehicle/disability")
 async def check_disability(plate: str):
@@ -317,14 +455,11 @@ async def check_disability(plate: str):
 
     plate_num = int(plate_clean)
     async with httpx.AsyncClient(timeout=15.0) as http_client:
-        resp = await http_client.get(
-            DATA_GOV_BASE,
-            params={
-                "resource_id": DISABILITY_RESOURCE_ID,
-                "filters": f'{{"MISPAR RECHEV":{plate_num}}}',
-                "limit": 1
-            }
-        )
+        resp = await fetch_with_retry(http_client, DATA_GOV_BASE, {
+            "resource_id": DISABILITY_RESOURCE_ID,
+            "filters": f'{{"MISPAR RECHEV":{plate_num}}}',
+            "limit": 1
+        })
     data = resp.json()
     records = data.get("result", {}).get("records", [])
     result = {"has_disability_tag": len(records) > 0}
@@ -340,20 +475,33 @@ async def full_vehicle_check(plate: str):
     if not plate_clean or len(plate_clean) < 5 or len(plate_clean) > 8:
         raise HTTPException(status_code=400, detail="Invalid plate number")
 
+    # Check cache
+    cache_key = f"full:{plate_clean}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
     plate_num = int(plate_clean)
     async with httpx.AsyncClient(timeout=15.0) as http_client:
         # Search vehicles, motorcycles, theft, and disability in parallel
+        # Use return_exceptions=True so one failing API doesn't crash everything
         vehicle_resp, motorcycle_resp, theft_resp, disability_resp = await asyncio.gather(
-            http_client.get(DATA_GOV_BASE, params={"resource_id": VEHICLE_RESOURCE_ID, "filters": f'{{"mispar_rechev":{plate_num}}}', "limit": 1}),
-            http_client.get(DATA_GOV_BASE, params={"resource_id": MOTORCYCLE_RESOURCE_ID, "filters": f'{{"mispar_rechev":{plate_num}}}', "limit": 1}),
-            http_client.get(DATA_GOV_BASE, params={"resource_id": THEFT_RESOURCE_ID, "filters": f'{{"MISPAR_RECHEV":{plate_num}}}', "limit": 1}),
-            http_client.get(DATA_GOV_BASE, params={"resource_id": DISABILITY_RESOURCE_ID, "filters": f'{{"MISPAR RECHEV":{plate_num}}}', "limit": 1}),
+            fetch_with_retry(http_client, DATA_GOV_BASE, {"resource_id": VEHICLE_RESOURCE_ID, "filters": f'{{"mispar_rechev":{plate_num}}}', "limit": 1}),
+            fetch_with_retry(http_client, DATA_GOV_BASE, {"resource_id": MOTORCYCLE_RESOURCE_ID, "filters": f'{{"mispar_rechev":{plate_num}}}', "limit": 1}),
+            fetch_with_retry(http_client, DATA_GOV_BASE, {"resource_id": THEFT_RESOURCE_ID, "filters": f'{{"MISPAR_RECHEV":{plate_num}}}', "limit": 1}),
+            fetch_with_retry(http_client, DATA_GOV_BASE, {"resource_id": DISABILITY_RESOURCE_ID, "filters": f'{{"MISPAR RECHEV":{plate_num}}}', "limit": 1}),
+            return_exceptions=True,
         )
 
-    vehicle_data = vehicle_resp.json().get("result", {}).get("records", [])
-    motorcycle_data = motorcycle_resp.json().get("result", {}).get("records", [])
-    theft_data = theft_resp.json().get("result", {}).get("records", [])
-    disability_data = disability_resp.json().get("result", {}).get("records", [])
+    vehicle_data = vehicle_resp.json().get("result", {}).get("records", []) if not isinstance(vehicle_resp, Exception) else []
+    motorcycle_data = motorcycle_resp.json().get("result", {}).get("records", []) if not isinstance(motorcycle_resp, Exception) else []
+    theft_data = theft_resp.json().get("result", {}).get("records", []) if not isinstance(theft_resp, Exception) else []
+    disability_data = disability_resp.json().get("result", {}).get("records", []) if not isinstance(disability_resp, Exception) else []
+
+    # Log any failed API calls
+    for name, resp in [("vehicle", vehicle_resp), ("motorcycle", motorcycle_resp), ("theft", theft_resp), ("disability", disability_resp)]:
+        if isinstance(resp, Exception):
+            logger.warning(f"{name} API call failed: {resp}")
 
     is_motorcycle = False
     vehicle_record = None
@@ -382,27 +530,46 @@ async def full_vehicle_check(plate: str):
         if tozeret_cd and degem_cd and shnat_yitzur:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as http_client:
-                    price_resp = await http_client.get(
-                        DATA_GOV_BASE,
-                        params={
-                            "resource_id": PRICE_LIST_RESOURCE_ID,
-                            "filters": f'{{"tozeret_cd":{tozeret_cd},"degem_cd":{degem_cd},"shnat_yitzur":{shnat_yitzur}}}',
-                            "limit": 5
-                        }
-                    )
+                    price_resp = await fetch_with_retry(http_client, DATA_GOV_BASE, {
+                        "resource_id": PRICE_LIST_RESOURCE_ID,
+                        "filters": f'{{"tozeret_cd":{tozeret_cd},"degem_cd":{degem_cd},"shnat_yitzur":{shnat_yitzur}}}',
+                        "limit": 5
+                    })
                 price_records = price_resp.json().get("result", {}).get("records", [])
                 if price_records:
                     price_info = _calculate_vehicle_value(price_records, shnat_yitzur)
             except Exception as e:
                 logger.warning(f"Price lookup failed: {e}")
 
-    return {
+    # Calculate test validity
+    test_valid = None
+    tokef_dt = vehicle_record.get("tokef_dt")
+    if tokef_dt:
+        try:
+            from datetime import date
+            expiry = datetime.fromisoformat(str(tokef_dt).replace("Z", "+00:00")) if "T" in str(tokef_dt) else datetime.strptime(str(tokef_dt)[:10], "%Y-%m-%d")
+            test_valid = expiry.date() > date.today() if hasattr(expiry, 'date') else expiry > datetime.now()
+        except Exception:
+            pass
+
+    # Calculate vehicle age
+    shnat = vehicle_record.get("shnat_yitzur")
+    age = (datetime.now().year - int(shnat)) if shnat else 0
+
+    # Calculate health score
+    health_score = calculate_vehicle_score(vehicle_record, theft_data, test_valid, age)
+
+    result = {
         "vehicle": vehicle_record,
         "is_motorcycle": is_motorcycle,
-        "theft": {"stolen": len(theft_data) > 0, "records": theft_data},
+        "theft": {"stolen": len(theft_data) > 0, "records": theft_data, "unavailable": isinstance(theft_resp, Exception)},
         "disability": disability_info,
-        "price": price_info
+        "price": price_info,
+        "health_score": health_score
     }
+
+    cache_set(cache_key, result)
+    return result
 
 
 def _calculate_vehicle_value(price_records, shnat_yitzur):
@@ -463,60 +630,87 @@ def _calculate_vehicle_value(price_records, shnat_yitzur):
 
 # --- AI Plate Recognition ---
 @api_router.post("/vehicle/ai-recognize")
-async def ai_recognize_plate(file: UploadFile = File(...)):
+async def ai_recognize_plate(request: Request, file: UploadFile = File(...)):
+    # Rate limit check
+    user = await get_current_user(request)
+    if user:
+        plan = user.get("plan", "free")
+        if not check_ai_rate_limit(user["user_id"], plan):
+            raise HTTPException(status_code=429, detail="הגעת למגבלת סריקות AI ביום. שדרג ל-Pro לסריקות ללא הגבלה.")
+
     contents = await file.read()
     if len(contents) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 10MB)")
 
     image_base64 = base64.b64encode(contents).decode("utf-8")
 
-    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
-    if not api_key:
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
         raise HTTPException(status_code=500, detail="AI service not configured")
 
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=f"plate-{uuid.uuid4().hex[:8]}",
-        system_message="You are a license plate recognition system for Israeli vehicles."
-    )
-    chat.with_model("gemini", "gemini-2.5-flash")
+    prompt = "Look at this image and find the Israeli license plate number. Israeli plates have 7 or 8 digits. Return ONLY the raw digits, nothing else. If no plate found, return NOT_FOUND."
+    body = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inlineData": {"mimeType": "image/jpeg", "data": image_base64}}
+            ]
+        }]
+    }
 
-    image_content = ImageContent(image_base64=image_base64)
-    user_message = UserMessage(
-        text="Look at this image and find the Israeli license plate number. Israeli plates have 7 or 8 digits. Return ONLY the raw digits, nothing else. If no plate found, return NOT_FOUND.",
-        file_contents=[image_content]
-    )
+    models = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
-    try:
-        response = await chat.send_message(user_message)
-        plate_text = response.strip()
-        digits = ''.join(filter(str.isdigit, plate_text))
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as http:
+                    resp = await http.post(url, json=body)
+                if resp.status_code in (503, 429):
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                if resp.status_code != 200:
+                    break  # try next model
+                result = resp.json()
+                text = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                digits = ''.join(filter(str.isdigit, text))
+                if "NOT_FOUND" in text or not digits:
+                    return {"success": False, "plate": None, "message": "No license plate detected"}
+                if len(digits) >= 7:
+                    digits = digits[:8]
+                    remaining = get_ai_remaining(user["user_id"], user.get("plan", "free")) if user else AI_DAILY_LIMIT
+                    return {"success": True, "plate": digits, "ai_remaining": remaining}
+                return {"success": False, "plate": None, "message": "No valid plate number detected"}
+            except Exception as e:
+                logger.warning(f"Gemini {model} attempt {attempt+1} error: {e}")
+                if attempt < 1:
+                    await asyncio.sleep(1.5)
 
-        if not digits or plate_text == "NOT_FOUND":
-            return {"success": False, "plate": None, "message": "No license plate detected"}
+    raise HTTPException(status_code=500, detail="AI recognition failed - all models busy")
 
-        return {"success": True, "plate": digits}
-    except Exception as e:
-        logger.error(f"AI recognition error: {e}")
-        # Fallback to gemini-2.0-flash
+# --- Vehicle Compare ---
+@api_router.post("/vehicle/compare")
+async def compare_vehicles(body: CompareRequest):
+    if len(body.plates) < 2 or len(body.plates) > 3:
+        raise HTTPException(status_code=400, detail="יש לבחור 2-3 רכבים להשוואה")
+
+    results = []
+    for plate in body.plates:
+        plate_clean = ''.join(filter(str.isdigit, plate))
+        if not plate_clean or len(plate_clean) < 5 or len(plate_clean) > 8:
+            results.append({"plate": plate, "error": "מספר לוחית לא תקין"})
+            continue
         try:
-            chat2 = LlmChat(
-                api_key=api_key,
-                session_id=f"plate-fallback-{uuid.uuid4().hex[:8]}",
-                system_message="You are a license plate recognition system for Israeli vehicles."
-            )
-            chat2.with_model("gemini", "gemini-2.5-flash-image")
-            response = await chat2.send_message(user_message)
-            plate_text = response.strip()
-            digits = ''.join(filter(str.isdigit, plate_text))
-            if not digits or plate_text == "NOT_FOUND":
-                return {"success": False, "plate": None, "message": "No license plate detected"}
-            return {"success": True, "plate": digits}
-        except Exception as e2:
-            logger.error(f"AI fallback error: {e2}")
-            raise HTTPException(status_code=500, detail="AI recognition failed")
+            # Reuse full_vehicle_check logic via direct call
+            from starlette.datastructures import QueryParams
+            data = await full_vehicle_check(plate_clean)
+            results.append({"plate": plate_clean, "data": data})
+        except HTTPException as e:
+            results.append({"plate": plate_clean, "error": e.detail})
+        except Exception as e:
+            results.append({"plate": plate_clean, "error": str(e)})
+
+    return {"comparisons": results}
 
 # --- Search History ---
 @api_router.get("/history")
@@ -573,6 +767,76 @@ async def remove_favorite(plate: str, request: Request):
     await db.favorites.delete_one({"plate": plate, "user_id": user["user_id"]})
     return {"message": "Removed from favorites"}
 
+# --- Watchlist ---
+@api_router.get("/watchlist")
+async def get_watchlist(request: Request):
+    user = await require_auth(request)
+    items = await db.watchlist.find(
+        {"user_id": user["user_id"]}, {"_id": 0}
+    ).sort("added_at", -1).to_list(50)
+    return {"watchlist": items}
+
+@api_router.post("/watchlist")
+async def add_to_watchlist(request: Request, item: WatchlistItem):
+    user = await require_auth(request)
+    existing = await db.watchlist.find_one({"user_id": user["user_id"], "plate": item.plate})
+    if existing:
+        return {"message": "Already watching this vehicle"}
+    doc = item.model_dump()
+    doc["user_id"] = user["user_id"]
+    doc["id"] = str(uuid.uuid4())
+    await db.watchlist.insert_one(doc)
+    return {"message": "Added to watchlist"}
+
+@api_router.delete("/watchlist/{plate}")
+async def remove_from_watchlist(plate: str, request: Request):
+    user = await require_auth(request)
+    await db.watchlist.delete_one({"plate": plate, "user_id": user["user_id"]})
+    return {"message": "Removed from watchlist"}
+
+@api_router.get("/watchlist/check")
+async def check_watchlist_alerts(request: Request):
+    """Check all watchlist vehicles for alerts (theft, test expiry)."""
+    user = await require_auth(request)
+    items = await db.watchlist.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(50)
+    alerts = []
+    for item in items:
+        plate = item.get("plate")
+        if not plate:
+            continue
+        try:
+            plate_num = int(''.join(filter(str.isdigit, plate)))
+            async with httpx.AsyncClient(timeout=10.0) as http_client:
+                checks = []
+                if "theft" in item.get("alert_types", []):
+                    checks.append(fetch_with_retry(http_client, DATA_GOV_BASE, {
+                        "resource_id": THEFT_RESOURCE_ID,
+                        "filters": f'{{"MISPAR_RECHEV":{plate_num}}}',
+                        "limit": 1
+                    }))
+                else:
+                    checks.append(asyncio.coroutine(lambda: None)() if False else asyncio.sleep(0))
+
+                results = await asyncio.gather(*checks, return_exceptions=True)
+
+                # Check theft
+                if "theft" in item.get("alert_types", []) and not isinstance(results[0], Exception):
+                    try:
+                        theft_records = results[0].json().get("result", {}).get("records", [])
+                        if theft_records:
+                            alerts.append({
+                                "plate": plate,
+                                "type": "theft",
+                                "message": f"רכב {plate} מדווח כגנוב!",
+                                "severity": "danger"
+                            })
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"Watchlist check failed for {plate}: {e}")
+
+    return {"alerts": alerts, "checked": len(items)}
+
 # --- Stats ---
 @api_router.get("/stats")
 async def get_stats():
@@ -581,151 +845,148 @@ async def get_stats():
     return {"total_searches": max(total_searches, 1247), "total_users": max(total_users, 850), "total_vehicles": 4200000}
 
 # --- Stripe Subscription ---
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
 
 # Fixed subscription packages — amounts defined server-side only
 PRO_PLAN = {"id": "pro_monthly", "name": "Pro Monthly", "amount": 5.00, "currency": "usd"}
+PRO_ANNUAL_PLAN = {"id": "pro_annual", "name": "Pro Annual", "amount": 48.00, "currency": "usd"}
 
 class CreateCheckoutRequest(BaseModel):
     origin_url: str
+    plan_type: str = "monthly"  # "monthly" or "annual"
 
 @api_router.post("/checkout/create")
 async def create_checkout_session(body: CreateCheckoutRequest, request: Request):
     user = await require_auth(request)
+    if not HAS_STRIPE:
+        raise HTTPException(status_code=503, detail="Payment integration is not available")
 
     stripe_api_key = os.environ.get("STRIPE_API_KEY")
     if not stripe_api_key:
         raise HTTPException(status_code=500, detail="Payment service not configured")
+    stripe.api_key = stripe_api_key
 
-    host_url = str(request.base_url).rstrip("/")
-    webhook_url = f"{host_url}/api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
+    plan = PRO_ANNUAL_PLAN if body.plan_type == "annual" else PRO_PLAN
+    subscription_days = 365 if body.plan_type == "annual" else 30
 
     origin = body.origin_url.rstrip("/")
     success_url = f"{origin}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{origin}/pricing"
 
-    checkout_request = CheckoutSessionRequest(
-        amount=PRO_PLAN["amount"],
-        currency=PRO_PLAN["currency"],
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=[{
+            "price_data": {
+                "currency": plan["currency"],
+                "product_data": {"name": plan["name"]},
+                "unit_amount": int(plan["amount"] * 100),
+            },
+            "quantity": 1,
+        }],
+        mode="payment",
         success_url=success_url,
         cancel_url=cancel_url,
         metadata={
             "user_id": user["user_id"],
             "plan": "pro",
-            "package_id": PRO_PLAN["id"]
+            "package_id": plan["id"],
+            "subscription_days": str(subscription_days)
         }
     )
 
-    session = await stripe_checkout.create_checkout_session(checkout_request)
-
-    # Create payment_transactions record BEFORE redirect
     await db.payment_transactions.insert_one({
-        "session_id": session.session_id,
+        "session_id": session.id,
         "user_id": user["user_id"],
-        "amount": PRO_PLAN["amount"],
-        "currency": PRO_PLAN["currency"],
-        "package_id": PRO_PLAN["id"],
+        "amount": plan["amount"],
+        "currency": plan["currency"],
+        "package_id": plan["id"],
         "payment_status": "pending",
         "status": "initiated",
+        "subscription_days": subscription_days,
         "metadata": {"plan": "pro"},
         "created_at": datetime.now(timezone.utc).isoformat()
     })
 
-    return {"url": session.url, "session_id": session.session_id}
+    return {"url": session.url, "session_id": session.id}
 
 @api_router.get("/checkout/status/{session_id}")
 async def get_checkout_status(session_id: str, request: Request):
     user = await require_auth(request)
+    if not HAS_STRIPE:
+        raise HTTPException(status_code=503, detail="Payment integration is not available")
 
     stripe_api_key = os.environ.get("STRIPE_API_KEY")
     if not stripe_api_key:
         raise HTTPException(status_code=500, detail="Payment service not configured")
-
-    host_url = str(request.base_url).rstrip("/")
-    webhook_url = f"{host_url}/api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
+    stripe.api_key = stripe_api_key
 
     try:
-        checkout_status = await stripe_checkout.get_checkout_status(session_id)
+        session = stripe.checkout.Session.retrieve(session_id)
     except Exception as e:
         logger.error(f"Checkout status error: {e}")
         raise HTTPException(status_code=404, detail="Checkout session not found")
 
-    # Update transaction record — only process once
+    payment_status = session.payment_status or "unpaid"
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
     if tx and tx.get("payment_status") != "paid":
-        new_status = checkout_status.payment_status
         await db.payment_transactions.update_one(
             {"session_id": session_id},
             {"$set": {
-                "payment_status": new_status,
-                "status": checkout_status.status,
+                "payment_status": payment_status,
+                "status": session.status,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }}
         )
-
-        # If paid, upgrade user to pro
-        if new_status == "paid":
-            subscription_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        if payment_status == "paid":
+            sub_days = tx.get("subscription_days", 30)
+            subscription_end = (datetime.now(timezone.utc) + timedelta(days=sub_days)).isoformat()
             await db.users.update_one(
                 {"user_id": tx["user_id"]},
-                {"$set": {
-                    "plan": "pro",
-                    "subscription_id": session_id,
-                    "subscription_end": subscription_end
-                }}
+                {"$set": {"plan": "pro", "subscription_id": session_id, "subscription_end": subscription_end}}
             )
             logger.info(f"User {tx['user_id']} upgraded to Pro")
 
     return {
-        "status": checkout_status.status,
-        "payment_status": checkout_status.payment_status,
-        "amount_total": checkout_status.amount_total,
-        "currency": checkout_status.currency
+        "status": session.status,
+        "payment_status": payment_status,
+        "amount_total": session.amount_total,
+        "currency": session.currency
     }
 
 @api_router.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
     body = await request.body()
-    signature = request.headers.get("Stripe-Signature", "")
+    sig = request.headers.get("Stripe-Signature", "")
 
     stripe_api_key = os.environ.get("STRIPE_API_KEY")
-    if not stripe_api_key:
-        raise HTTPException(status_code=500, detail="Payment service not configured")
-
-    host_url = str(request.base_url).rstrip("/")
-    webhook_url = f"{host_url}/api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=stripe_api_key, webhook_url=webhook_url)
+    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
+    if not stripe_api_key or not HAS_STRIPE:
+        return {"status": "error", "message": "Payment integration unavailable"}
+    stripe.api_key = stripe_api_key
 
     try:
-        webhook_response = await stripe_checkout.handle_webhook(body, signature)
-        logger.info(f"Webhook event: {webhook_response.event_type}, session: {webhook_response.session_id}")
+        if webhook_secret:
+            event = stripe.Webhook.construct_event(body, sig, webhook_secret)
+        else:
+            import json as _json
+            event = _json.loads(body)
 
-        if webhook_response.payment_status == "paid" and webhook_response.session_id:
-            tx = await db.payment_transactions.find_one(
-                {"session_id": webhook_response.session_id}, {"_id": 0}
-            )
-            if tx and tx.get("payment_status") != "paid":
-                await db.payment_transactions.update_one(
-                    {"session_id": webhook_response.session_id},
-                    {"$set": {
-                        "payment_status": "paid",
-                        "status": "complete",
-                        "webhook_event_id": webhook_response.event_id,
-                        "updated_at": datetime.now(timezone.utc).isoformat()
-                    }}
-                )
-                subscription_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-                await db.users.update_one(
-                    {"user_id": tx["user_id"]},
-                    {"$set": {
-                        "plan": "pro",
-                        "subscription_id": webhook_response.session_id,
-                        "subscription_end": subscription_end
-                    }}
-                )
-
+        if event.get("type") == "checkout.session.completed":
+            sess = event["data"]["object"]
+            session_id = sess["id"]
+            ps = sess.get("payment_status", "")
+            if ps == "paid":
+                tx = await db.payment_transactions.find_one({"session_id": session_id})
+                if tx and tx.get("payment_status") != "paid":
+                    await db.payment_transactions.update_one(
+                        {"session_id": session_id},
+                        {"$set": {"payment_status": "paid", "status": "complete", "updated_at": datetime.now(timezone.utc).isoformat()}}
+                    )
+                    sub_days = tx.get("subscription_days", 30)
+                    subscription_end = (datetime.now(timezone.utc) + timedelta(days=sub_days)).isoformat()
+                    await db.users.update_one(
+                        {"user_id": tx["user_id"]},
+                        {"$set": {"plan": "pro", "subscription_id": session_id, "subscription_end": subscription_end}}
+                    )
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -749,8 +1010,242 @@ async def cancel_subscription(request: Request):
     )
     return {"message": "Subscription cancelled", "plan": "free"}
 
+# --- Statistics Endpoints (sample-based aggregation) ---
+async def _fetch_sample(fields: str = "", limit: int = 5000, offset: int = 0):
+    """Fetch a sample of vehicles for statistics aggregation."""
+    params = {"resource_id": VEHICLE_RESOURCE_ID, "limit": limit, "offset": offset}
+    if fields:
+        params["fields"] = fields
+    async with httpx.AsyncClient(timeout=30.0) as http_client:
+        resp = await fetch_with_retry(http_client, DATA_GOV_BASE, params)
+    return resp.json().get("result", {}).get("records", [])
+
+def _aggregate(records, field):
+    """Count occurrences of a field value."""
+    counts = defaultdict(int)
+    for r in records:
+        val = r.get(field)
+        if val:
+            counts[str(val)] += 1
+    return sorted([{"name": k, "count": v} for k, v in counts.items()], key=lambda x: -x["count"])
+
+@api_router.get("/statistics/popular-manufacturers")
+async def popular_manufacturers():
+    cache_key = "stats:popular_mfr"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    try:
+        records = await _fetch_sample("tozeret_nm", 10000)
+        agg = _aggregate(records, "tozeret_nm")[:15]
+        result = {"manufacturers": [{"tozeret_nm": a["name"], "count": a["count"]} for a in agg]}
+        cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"Statistics API error: {e}")
+        return {"manufacturers": [], "error": str(e)}
+
+@api_router.get("/statistics/fuel-distribution")
+async def fuel_distribution():
+    cache_key = "stats:fuel_dist"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    try:
+        records = await _fetch_sample("sug_delek_nm", 10000)
+        agg = _aggregate(records, "sug_delek_nm")[:10]
+        result = {"fuel_types": [{"sug_delek_nm": a["name"], "count": a["count"]} for a in agg]}
+        cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"Fuel stats error: {e}")
+        return {"fuel_types": [], "error": str(e)}
+
+@api_router.get("/statistics/year-distribution")
+async def year_distribution():
+    cache_key = "stats:year_dist"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    try:
+        records = await _fetch_sample("shnat_yitzur", 10000)
+        agg = _aggregate(records, "shnat_yitzur")
+        # Filter to 2000+
+        filtered = [a for a in agg if a["name"].isdigit() and int(a["name"]) >= 2000]
+        filtered.sort(key=lambda x: -int(x["name"]))
+        result = {"years": [{"shnat_yitzur": int(a["name"]), "count": a["count"]} for a in filtered[:30]]}
+        cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"Year stats error: {e}")
+        return {"years": [], "error": str(e)}
+
+@api_router.get("/statistics/color-distribution")
+async def color_distribution():
+    cache_key = "stats:color_dist"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    try:
+        records = await _fetch_sample("tzeva_rechev", 10000)
+        agg = _aggregate(records, "tzeva_rechev")[:15]
+        result = {"colors": [{"tzeva_rechev": a["name"], "count": a["count"]} for a in agg]}
+        cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"Color stats error: {e}")
+        return {"colors": [], "error": str(e)}
+
+
+# --- Encyclopedia Endpoints ---
+@api_router.get("/encyclopedia/manufacturers")
+async def list_manufacturers():
+    cache_key = "enc:manufacturers"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    try:
+        records = await _fetch_sample("tozeret_cd,tozeret_nm", 10000)
+        # Aggregate by manufacturer
+        mfr_map = {}
+        for r in records:
+            cd = r.get("tozeret_cd")
+            nm = r.get("tozeret_nm")
+            if cd and nm:
+                key = str(cd)
+                if key not in mfr_map:
+                    mfr_map[key] = {"tozeret_cd": cd, "tozeret_nm": nm, "vehicle_count": 0}
+                mfr_map[key]["vehicle_count"] += 1
+        manufacturers = sorted(mfr_map.values(), key=lambda x: -x["vehicle_count"])[:80]
+        result = {"manufacturers": manufacturers}
+        cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"Encyclopedia manufacturers error: {e}")
+        return {"manufacturers": [], "error": str(e)}
+
+@api_router.get("/encyclopedia/models")
+async def list_models(manufacturer_code: int):
+    cache_key = f"enc:models:{manufacturer_code}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http_client:
+            resp = await fetch_with_retry(http_client, DATA_GOV_BASE, {
+                "resource_id": VEHICLE_RESOURCE_ID,
+                "filters": f'{{"tozeret_cd":{manufacturer_code}}}',
+                "fields": "degem_nm,degem_cd,kinuy_mishari,shnat_yitzur",
+                "limit": 1000
+            })
+        records = resp.json().get("result", {}).get("records", [])
+        # Aggregate by model
+        model_map = {}
+        for r in records:
+            key = f"{r.get('degem_cd')}_{r.get('kinuy_mishari','')}"
+            if key not in model_map:
+                model_map[key] = {
+                    "degem_nm": r.get("degem_nm"),
+                    "degem_cd": r.get("degem_cd"),
+                    "kinuy_mishari": r.get("kinuy_mishari", ""),
+                    "years": set(),
+                    "count": 0
+                }
+            model_map[key]["count"] += 1
+            yr = r.get("shnat_yitzur")
+            if yr:
+                model_map[key]["years"].add(yr)
+        models = []
+        for m in sorted(model_map.values(), key=lambda x: -x["count"]):
+            m["years"] = sorted(m["years"])
+            models.append(m)
+        result = {"models": models[:100]}
+        cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"Encyclopedia models error: {e}")
+        return {"models": [], "error": str(e)}
+
+@api_router.get("/encyclopedia/model-details")
+async def model_details(manufacturer_code: int, model_code: int):
+    cache_key = f"enc:detail:{manufacturer_code}:{model_code}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http_client:
+            resp = await fetch_with_retry(http_client, DATA_GOV_BASE, {
+                "resource_id": VEHICLE_RESOURCE_ID,
+                "filters": f'{{"tozeret_cd":{manufacturer_code},"degem_cd":{model_code}}}',
+                "limit": 20
+            })
+        records = resp.json().get("result", {}).get("records", [])
+        result = {"vehicles": records}
+        cache_set(cache_key, result)
+        return result
+    except Exception as e:
+        logger.warning(f"Model details error: {e}")
+        return {"vehicles": [], "error": str(e)}
+
+
+# --- Similar Vehicles ---
+@api_router.get("/vehicle/similar")
+async def find_similar_vehicles(plate: str):
+    plate_clean = ''.join(filter(str.isdigit, plate))
+    if not plate_clean:
+        raise HTTPException(status_code=400, detail="Invalid plate number")
+    cache_key = f"similar:{plate_clean}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    plate_num = int(plate_clean)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http_client:
+            resp = await fetch_with_retry(http_client, DATA_GOV_BASE, {
+                "resource_id": VEHICLE_RESOURCE_ID,
+                "filters": f'{{"mispar_rechev":{plate_num}}}',
+                "limit": 1
+            })
+            records = resp.json().get("result", {}).get("records", [])
+            if not records:
+                raise HTTPException(status_code=404, detail="Vehicle not found")
+            vehicle = records[0]
+            tozeret_cd = vehicle.get("tozeret_cd")
+            shnat = vehicle.get("shnat_yitzur", 2020)
+            # Find similar: same manufacturer
+            similar_resp = await fetch_with_retry(http_client, DATA_GOV_BASE, {
+                "resource_id": VEHICLE_RESOURCE_ID,
+                "filters": f'{{"tozeret_cd":{tozeret_cd}}}',
+                "fields": "degem_nm,kinuy_mishari,shnat_yitzur,sug_delek_nm,tzeva_rechev",
+                "limit": 20
+            })
+            similar_records = similar_resp.json().get("result", {}).get("records", [])
+            # Filter to within 2 years and deduplicate
+            seen = set()
+            similar = []
+            for r in similar_records:
+                yr = r.get("shnat_yitzur", 0)
+                if abs(yr - shnat) <= 2:
+                    key = f"{r.get('degem_nm')}_{yr}"
+                    if key not in seen:
+                        seen.add(key)
+                        similar.append(r)
+                if len(similar) >= 10:
+                    break
+            result = {
+                "source": {"tozeret_nm": vehicle.get("tozeret_nm"), "degem_nm": vehicle.get("degem_nm"), "shnat_yitzur": shnat},
+                "similar": similar
+            }
+            cache_set(cache_key, result)
+            return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Similar vehicles error: {e}")
+        return {"source": None, "similar": [], "error": str(e)}
+
+
 # Include router and middleware
-import asyncio
 app.include_router(api_router)
 
 app.add_middleware(

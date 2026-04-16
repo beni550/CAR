@@ -14,6 +14,12 @@ import PricingPage from './pages/PricingPage';
 import AccountPage from './pages/AccountPage';
 import QuickSearchPage from './pages/QuickSearchPage';
 import PaymentSuccess from './pages/PaymentSuccess';
+import ComparePage from './pages/ComparePage';
+import WatchlistPage from './pages/WatchlistPage';
+import CalculatorsPage from './pages/CalculatorsPage';
+import StatisticsPage from './pages/StatisticsPage';
+import EncyclopediaPage from './pages/EncyclopediaPage';
+import GuidesPage from './pages/GuidesPage';
 import './index.css';
 
 function AppRouter() {
@@ -42,6 +48,12 @@ function AppRouter() {
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/account" element={<AccountPage />} />
         <Route path="/payment/success" element={<PaymentSuccess />} />
+        <Route path="/compare" element={<ComparePage />} />
+        <Route path="/watchlist" element={<WatchlistPage />} />
+        <Route path="/calculators" element={<CalculatorsPage />} />
+        <Route path="/statistics" element={<StatisticsPage />} />
+        <Route path="/encyclopedia" element={<EncyclopediaPage />} />
+        <Route path="/guides" element={<GuidesPage />} />
         <Route path="/dashboard" element={<HomePage />} />
         <Route path="*" element={<HomePage />} />
       </Routes>
