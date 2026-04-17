@@ -648,12 +648,16 @@ async def ai_recognize_plate(request: Request, file: UploadFile = File(...)):
     if not gemini_key:
         raise HTTPException(status_code=500, detail="AI service not configured")
 
+    mime_type = file.content_type or "image/jpeg"
+    if mime_type not in ("image/jpeg", "image/png", "image/webp", "image/gif", "image/heic"):
+        mime_type = "image/jpeg"
+
     prompt = "Look at this image and find the Israeli license plate number. Israeli plates have 7 or 8 digits. Return ONLY the raw digits, nothing else. If no plate found, return NOT_FOUND."
     body = {
         "contents": [{
             "parts": [
                 {"text": prompt},
-                {"inlineData": {"mimeType": "image/jpeg", "data": image_base64}}
+                {"inlineData": {"mimeType": mime_type, "data": image_base64}}
             ]
         }]
     }
@@ -678,7 +682,7 @@ async def ai_recognize_plate(request: Request, file: UploadFile = File(...)):
                     return {"success": False, "plate": None, "message": "No license plate detected"}
                 if len(digits) >= 7:
                     digits = digits[:8]
-                    remaining = get_ai_remaining(user["user_id"], user.get("plan", "free")) if user else AI_DAILY_LIMIT
+                    remaining = get_ai_remaining(user["user_id"], user.get("plan", "free")) if user else AI_DAILY_LIMIT - 1
                     return {"success": True, "plate": digits, "ai_remaining": remaining}
                 return {"success": False, "plate": None, "message": "No valid plate number detected"}
             except Exception as e:
