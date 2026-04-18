@@ -1,8 +1,57 @@
-@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700;800;900&family=Heebo:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700;800;900&family=Heebo:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ============ CONSOLE DESIGN SYSTEM (Variant B) ============ */
+:root {
+  --console-bg: #FAFAFA;
+  --console-bg-1: #FFFFFF;
+  --console-bg-2: #F4F4F2;
+  --console-bg-3: #EAEAE6;
+  --console-ink: #0A0A0A;
+  --console-ink-2: #2A2A2A;
+  --console-ink-3: #6B6B6B;
+  --console-line: rgba(0,0,0,0.06);
+  --console-line-2: rgba(0,0,0,0.12);
+  --console-yellow: #FFCC00;
+  --console-yellow-ink: #0A0A0A;
+  --console-green: #10B981;
+  --console-red: #EF4444;
+  --console-blue: #2D6AE3;
+  --console-plate-blue: #003399;
+}
+
+.font-mono-jb { font-family: 'JetBrains Mono', 'Courier New', monospace !important; }
+
+.console-body { background: var(--console-bg) !important; color: var(--console-ink) !important; }
+
+/* Console utility classes */
+.c-card { background: var(--console-bg-1); border: 1px solid var(--console-line-2); border-radius: 10px; }
+.c-card-tight { background: var(--console-bg-1); border: 1px solid var(--console-line); border-radius: 10px; overflow: hidden; }
+.c-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--console-line); font-size: 13px; }
+.c-row:last-child { border-bottom: none; }
+.c-label { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--console-ink-3); letter-spacing: 0.08em; text-transform: uppercase; }
+.c-tag { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--console-ink-3); padding: 2px 6px; border: 1px solid var(--console-line-2); border-radius: 4px; }
+.c-tag-yellow { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 2px 7px; background: var(--console-yellow); color: var(--console-yellow-ink); border-radius: 4px; font-weight: 700; }
+.c-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 16px; border: 1px solid var(--console-line-2); background: var(--console-bg-1); color: var(--console-ink); border-radius: 8px; font-weight: 600; font-size: 13.5px; transition: all .15s; cursor: pointer; }
+.c-btn:hover { background: var(--console-bg-2); }
+.c-btn-yellow { background: var(--console-yellow); color: var(--console-yellow-ink); border-color: var(--console-yellow); font-weight: 700; }
+.c-btn-yellow:hover { background: #FFB800; }
+.c-btn-ink { background: var(--console-ink); color: var(--console-yellow); border-color: var(--console-ink); }
+.c-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.c-dot-green { background: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+.c-dot-red { background: #EF4444; box-shadow: 0 0 0 3px rgba(239,68,68,0.15); }
+.c-dot-gray { background: var(--console-ink-3); }
+.c-mono-input { font-family: 'JetBrains Mono', monospace !important; font-weight: 600; letter-spacing: 2px; }
+
+/* Plate rendering */
+.c-plate { display: inline-flex; direction: ltr; border: 2px solid var(--console-ink); background: var(--console-yellow); border-radius: 6px; overflow: hidden; box-shadow: 0 2px 0 var(--console-ink); font-family: 'Rubik', monospace; font-weight: 800; }
+.c-plate .il { background: var(--console-plate-blue); color: #fff; padding: 3px 5px; font-size: 8px; font-weight: 700; letter-spacing: 0.5px; display: flex; align-items: center; justify-content: center; min-width: 18px; }
+.c-plate .num { padding: 4px 10px; color: #000; letter-spacing: 2px; font-size: 14px; line-height: 1; }
+.c-plate.lg .num { font-size: 20px; padding: 7px 14px; letter-spacing: 3px; }
+.c-plate.lg .il { font-size: 10px; padding: 4px 7px; min-width: 24px; }
 
 /* =============================================
    RECHEV IL — PREMIUM DESIGN SYSTEM 2026
